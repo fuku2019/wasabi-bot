@@ -237,10 +237,11 @@ async def send_next_once(
         # edit_message が失敗したら処理済みにしない（ボタンが押せないまま死ぬのを防ぐ）
         await interaction.response.edit_message(view=None)
         client.processed_button_messages.add(message_id)
+        mention_content = f"{interaction.user.mention}が押しました\n{content}"
         if view is None:
-            await interaction.followup.send(content)
+            await interaction.followup.send(mention_content)
         else:
-            await interaction.followup.send(content, view=view)
+            await interaction.followup.send(mention_content, view=view)
 
 
 @bot.tree.command(name="set_channel", description="このチャンネルを自動投稿先に設定します。")
