@@ -296,7 +296,7 @@ async def daily_post(client: WasabiBot) -> None:
 
     already_posted_for_this_schedule = (
         config.get("last_post_date") == today
-        and config.get("last_post_time") in (None, post_time)
+        and config.get("last_post_time") == post_time
     )
 
     if (
