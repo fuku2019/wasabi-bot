@@ -51,6 +51,10 @@ def load_config() -> dict[str, Any]:
         logger.warning("Failed to load config.json. Using defaults: %s", error)
         return DEFAULT_CONFIG.copy()
 
+    if not isinstance(loaded, dict):
+        logger.warning("config.json is not a JSON object. Using defaults.")
+        return DEFAULT_CONFIG.copy()
+
     return {**DEFAULT_CONFIG, **loaded}
 
 
@@ -136,6 +140,8 @@ class WasabiBot(discord.Client):
         self.tree = app_commands.CommandTree(self)
         self.button_locks: dict[int, asyncio.Lock] = {}
         self.processed_button_messages: set[int] = set()
+        # config.json への保存が失敗しても同じ枠を再投稿しないためのメモリ上の記録
+        self.last_posted: tuple[str, str] | None = None
 
     async def setup_hook(self) -> None:
         self.add_view(WasabiView())
@@ -208,8 +214,9 @@ async def send_next_once(
             )
             return
 
-        client.processed_button_messages.add(message_id)
+        # edit_message が失敗したら処理済みにしない（ボタンが押せないまま死ぬのを防ぐ）
         await interaction.response.edit_message(view=None)
+        client.processed_button_messages.add(message_id)
         if view is None:
             await interaction.followup.send(content)
         else:
@@ -292,7 +299,11 @@ async def daily_post(client: WasabiBot) -> None:
         and config.get("last_post_time") in (None, post_time)
     )
 
-    if now.time() < scheduled_time or already_posted_for_this_schedule:
+    if (
+        now.time() < scheduled_time
+        or already_posted_for_this_schedule
+        or client.last_posted == (today, post_time)
+    ):
         return
 
     try:
@@ -304,6 +315,9 @@ async def daily_post(client: WasabiBot) -> None:
             return
 
         await channel.send("わさび", view=WasabiView())
+        client.last_posted = (today, post_time)
+        # send を待っている間にスラッシュコマンドが更新している可能性があるので読み直す
+        config = load_config()
         config["last_post_date"] = today
         config["last_post_time"] = post_time
         save_config(config)

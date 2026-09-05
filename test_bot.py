@@ -36,3 +36,11 @@ def test_load_config_survives_broken_json(tmp_path, monkeypatch):
     monkeypatch.setattr(wasabi, "CONFIG_PATH", path)
 
     assert wasabi.load_config() == wasabi.DEFAULT_CONFIG
+
+
+def test_load_config_rejects_non_object_json(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text("[1, 2]", encoding="utf-8")
+    monkeypatch.setattr(wasabi, "CONFIG_PATH", path)
+
+    assert wasabi.load_config() == wasabi.DEFAULT_CONFIG
