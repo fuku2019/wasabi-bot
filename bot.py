@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 from datetime import date, datetime
 from datetime import time as datetime_time
 from pathlib import Path
@@ -14,7 +13,6 @@ from discord.ext import tasks
 from dotenv import load_dotenv
 
 CONFIG_PATH = Path(__file__).parent / "config.json"
-TIME_PATTERN = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
 
 WASABI_REPLY = "くっだらねえ！なんだよそれ！わっかわっかしい！"
 
@@ -26,9 +24,9 @@ KEYWORD_REPLIES = {
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "channel_id": None,
-    "post_time": None,
+    "post_times": ["00:00", "12:00"],
     "last_post_date": None,
-    "last_post_time": None,
+    "last_posted_times": [],
 }
 
 
@@ -145,7 +143,7 @@ class WasabiBot(discord.Client):
         self.button_locks: dict[int, asyncio.Lock] = {}
         self.processed_button_messages: set[int] = set()
         # config.json への保存が失敗しても同じ枠を再投稿しないためのメモリ上の記録
-        self.last_posted: tuple[str, str] | None = None
+        self.last_posted: set[tuple[str, str]] = set()
 
     async def setup_hook(self) -> None:
         self.add_view(WasabiView())
@@ -251,32 +249,6 @@ async def set_channel(interaction: discord.Interaction) -> None:
     )
 
 
-@bot.tree.command(name="set_time", description="自動投稿時刻をHH:MM形式で設定します。")
-@app_commands.describe(time="24時間表記の時刻。例: 09:30")
-@app_commands.guild_only()
-@app_commands.default_permissions(manage_guild=True)
-async def set_time(interaction: discord.Interaction, time: str) -> None:
-    if not TIME_PATTERN.fullmatch(time):
-        await interaction.response.send_message(
-            "時刻は `HH:MM` の24時間表記で入力してください。例: `09:30`",
-            ephemeral=True,
-        )
-        return
-
-    config = load_config()
-    previous_time = config.get("post_time")
-    config["post_time"] = time
-    if previous_time != time:
-        config["last_post_date"] = None
-        config["last_post_time"] = None
-    save_config(config)
-
-    await interaction.response.send_message(
-        f"自動投稿時刻を `{time}` に設定しました。",
-        ephemeral=True,
-    )
-
-
 @bot.tree.command(name="わさび", description="わさび")
 async def wasabi(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(WASABI_REPLY)
@@ -286,31 +258,38 @@ async def wasabi(interaction: discord.Interaction) -> None:
 async def daily_post(client: WasabiBot) -> None:
     config = load_config()
     channel_id = config.get("channel_id")
-    post_time = config.get("post_time")
+    post_times = config.get("post_times") or []
 
-    if not channel_id or not post_time:
+    if not channel_id or not post_times:
         return
 
     # 投稿時刻はBotを動かしている環境のローカル時刻で判定する（README参照）
     now = datetime.now()  # noqa: DTZ005
     today = date.today().isoformat()  # noqa: DTZ011
 
-    try:
-        scheduled_time = datetime_time.fromisoformat(post_time)
-    except ValueError:
-        logger.warning("Configured post_time is invalid: %s", post_time)
-        return
-
-    already_posted_for_this_schedule = (
-        config.get("last_post_date") == today
-        and config.get("last_post_time") == post_time
+    # 日付が変わったら「今日投稿済みの時刻」はリセットする
+    posted_times: list[str] = (
+        config.get("last_posted_times") or [] if config.get("last_post_date") == today else []
     )
+    client.last_posted = {entry for entry in client.last_posted if entry[0] == today}
 
-    if (
-        now.time() < scheduled_time
-        or already_posted_for_this_schedule
-        or client.last_posted == (today, post_time)
-    ):
+    due_time: str | None = None
+    for post_time in post_times:
+        try:
+            scheduled_time = datetime_time.fromisoformat(post_time)
+        except ValueError:
+            logger.warning("Configured post_time is invalid, skipping: %s", post_time)
+            continue
+
+        if (
+            now.time() >= scheduled_time
+            and post_time not in posted_times
+            and (today, post_time) not in client.last_posted
+        ):
+            due_time = post_time
+            break
+
+    if due_time is None:
         return
 
     try:
@@ -326,13 +305,13 @@ async def daily_post(client: WasabiBot) -> None:
         # 残しておく意味があるのは「押下直後の同時押し」を弾く数秒間だけ。
         client.processed_button_messages.clear()
         client.button_locks.clear()
-        client.last_posted = (today, post_time)
-        # send を待っている間にスラッシュコマンドが更新している可能性があるので読み直す
+        client.last_posted.add((today, due_time))
+        # send を待っている間に別の投稿処理が更新している可能性があるので読み直す
         config = load_config()
         config["last_post_date"] = today
-        config["last_post_time"] = post_time
+        config["last_posted_times"] = sorted({*posted_times, due_time})
         save_config(config)
-        logger.info("Posted daily wasabi message to channel %s", channel_id)
+        logger.info("Posted daily wasabi message to channel %s (%s)", channel_id, due_time)
     except (TypeError, ValueError):
         logger.exception("Configured channel_id is invalid: %s", channel_id)
     except discord.Forbidden:

@@ -3,13 +3,6 @@ import json
 import bot as wasabi
 
 
-def test_time_pattern():
-    for ok in ("00:00", "09:30", "23:59"):
-        assert wasabi.TIME_PATTERN.fullmatch(ok)
-    for ng in ("24:00", "9:30", "09:60", "0930", "09:30 "):
-        assert not wasabi.TIME_PATTERN.fullmatch(ng)
-
-
 def test_find_reply():
     assert wasabi.find_reply("わさび") == wasabi.WASABI_REPLY
     assert wasabi.find_reply("わさび食べたい") == wasabi.WASABI_REPLY
@@ -26,7 +19,7 @@ def test_load_config_fills_missing_keys(tmp_path, monkeypatch):
     config = wasabi.load_config()
 
     assert config["channel_id"] == 123
-    assert config["post_time"] is None
+    assert config["post_times"] == ["00:00", "12:00"]
     assert set(config) == set(wasabi.DEFAULT_CONFIG)
 
 
