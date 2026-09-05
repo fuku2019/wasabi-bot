@@ -38,6 +38,16 @@ def test_load_config_survives_broken_json(tmp_path, monkeypatch):
     assert wasabi.load_config() == wasabi.DEFAULT_CONFIG
 
 
+def test_load_config_survives_unwritable_dir(tmp_path, monkeypatch):
+    def deny(config):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(wasabi, "CONFIG_PATH", tmp_path / "config.json")
+    monkeypatch.setattr(wasabi, "save_config", deny)
+
+    assert wasabi.load_config() == wasabi.DEFAULT_CONFIG
+
+
 def test_load_config_rejects_non_object_json(tmp_path, monkeypatch):
     path = tmp_path / "config.json"
     path.write_text("[1, 2]", encoding="utf-8")

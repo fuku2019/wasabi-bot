@@ -41,7 +41,11 @@ logger = logging.getLogger("wasabi-bot")
 
 def load_config() -> dict[str, Any]:
     if not CONFIG_PATH.exists():
-        save_config(DEFAULT_CONFIG)
+        try:
+            save_config(DEFAULT_CONFIG)
+        except OSError as error:
+            # 設定は保存されないが、起動して応答だけはできるようにする
+            logger.warning("Failed to create config.json. Settings will not persist: %s", error)
         return DEFAULT_CONFIG.copy()
 
     try:
