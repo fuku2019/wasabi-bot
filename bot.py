@@ -315,6 +315,10 @@ async def daily_post(client: WasabiBot) -> None:
             return
 
         await channel.send("わさび", view=WasabiView())
+        # 前回分のボタン記録を捨てる。押下済みメッセージのボタンは既に消えているので、
+        # 残しておく意味があるのは「押下直後の同時押し」を弾く数秒間だけ。
+        client.processed_button_messages.clear()
+        client.button_locks.clear()
         client.last_posted = (today, post_time)
         # send を待っている間にスラッシュコマンドが更新している可能性があるので読み直す
         config = load_config()
