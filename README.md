@@ -5,11 +5,11 @@
 
 ## 機能
 
-- `/set_channel`
+- `/set_channel`（要サーバー管理権限）
   - コマンドを実行したチャンネルを、自動投稿先として `config.json` に保存します。
 - `/わさび`
   - 「くっだらねえ！なんだよそれ！わっかわっかしい！」と返します。
-- `/わさびを投稿する`（デバッグ用）
+- `/わさびを投稿する`（デバッグ用・要サーバー管理権限）
   - 時刻に関係なく、自動投稿先へ即座に「わさび」を投稿します。
 - キーワード自動応答（メッセージの先頭が一致したときだけ反応します）
   - `わさび…` → 「くっだらねえ！なんだよそれ！わっかわっかしい！」
@@ -32,7 +32,7 @@ Discord Developer PortalでBotを作成し、Botトークンを取得してく�
 - `Use Slash Commands`
 - `Read Message History`
 
-スラッシュコマンドの設定操作は、サーバー管理権限を持つユーザーが実行できます。
+`/set_channel` と `/わさびを投稿する` は、サーバー管理権限を持つユーザーのみサーバー内で実行できます（DMでは実行できません）。
 
 ### Message Content Intent の有効化
 
@@ -124,4 +124,4 @@ uv run --no-dev bot.py
 └── README.md
 ```
 
-`config.json` はBot実行時に自動作成されます。`config.json.example` はその設定例です（投稿時刻を1日4回にした例を掲載しています）。`.env` と `config.json` は `.gitignore` に含まれているため、Gitにはコミットされません。`uv.lock` は依存バージョンを固定するためのファイルなので、Gitにコミットします。
+`config.json` はBot実行時に自動作成されます。`config.json.example` はその設定例です（投稿時刻を1日4回にした例を掲載しています）。`channel_id`・`last_post_date`・`last_posted_times` はBotが自動管理する値なので、手動編集が必要なのは `post_times` だけです。`.env` と `config.json` は `.gitignore` に含まれているため、Gitにはコミットされません。`uv.lock` は依存バージョンを固定するためのファイルなので、Gitにコミットします。
