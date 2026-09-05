@@ -10,6 +10,14 @@ def test_time_pattern():
         assert not wasabi.TIME_PATTERN.fullmatch(ng)
 
 
+def test_find_reply():
+    assert wasabi.find_reply("わさび") == wasabi.WASABI_REPLY
+    assert wasabi.find_reply("わさび食べたい") == wasabi.WASABI_REPLY
+    assert wasabi.find_reply("わらび餅") == "わさび餅"  # 長いキーワードが先に一致する
+    assert wasabi.find_reply("おいしいわさび") is None  # 前方一致なので反応しない
+    assert wasabi.find_reply("") is None
+
+
 def test_load_config_fills_missing_keys(tmp_path, monkeypatch):
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"channel_id": 123}), encoding="utf-8")

@@ -16,6 +16,14 @@ from dotenv import load_dotenv
 CONFIG_PATH = Path(__file__).parent / "config.json"
 TIME_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
+WASABI_REPLY = "くっだらねえ！なんだよそれ！わっかわっかしい！"
+
+# 前方一致で判定するので、長いキーワードを先に置く（dictは挿入順を保つ）
+KEYWORD_REPLIES = {
+    "わらび餅": "わさび餅",
+    "わさび": WASABI_REPLY,
+}
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "channel_id": None,
     "post_time": None,
@@ -44,6 +52,13 @@ def load_config() -> dict[str, Any]:
         return DEFAULT_CONFIG.copy()
 
     return {**DEFAULT_CONFIG, **loaded}
+
+
+def find_reply(content: str) -> str | None:
+    for keyword, reply in KEYWORD_REPLIES.items():
+        if content.startswith(keyword):
+            return reply
+    return None
 
 
 def save_config(config: dict[str, Any]) -> None:
@@ -116,6 +131,7 @@ class DirtyJokeView(discord.ui.View):
 class WasabiBot(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.default()
+        intents.message_content = True
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.button_locks: dict[int, asyncio.Lock] = {}
@@ -146,6 +162,16 @@ class WasabiBot(discord.Client):
 
     async def on_ready(self) -> None:
         logger.info("Logged in as %s (ID: %s)", self.user, self.user.id if self.user else "unknown")
+        await self.change_presence(activity=discord.Game(name="わさび"))
+
+    async def on_message(self, message: discord.Message) -> None:
+        # 自動投稿の「わさび」に自分で反応しないよう、Bot発言は全て無視する
+        if message.author.bot:
+            return
+
+        reply = find_reply(message.content)
+        if reply:
+            await message.channel.send(reply)
 
 
 bot = WasabiBot()
@@ -235,6 +261,11 @@ async def set_time(interaction: discord.Interaction, time: str) -> None:
         f"自動投稿時刻を `{time}` に設定しました。",
         ephemeral=True,
     )
+
+
+@bot.tree.command(name="わさび", description="わさび")
+async def wasabi(interaction: discord.Interaction) -> None:
+    await interaction.response.send_message(WASABI_REPLY)
 
 
 @tasks.loop(seconds=30)
