@@ -1,0 +1,24 @@
+# Secrets and local runtime config
+.env
+config.json
+*.json.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# uv / virtual environments
+# uv.lock はアプリなのでコミットする（無視しない）
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
