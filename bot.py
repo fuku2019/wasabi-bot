@@ -2,7 +2,8 @@ import asyncio
 import json
 import logging
 import os
-from datetime import date, datetime
+import time
+from datetime import date, datetime, timedelta
 from datetime import time as datetime_time
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,10 @@ from dotenv import load_dotenv
 CONFIG_PATH = Path(__file__).parent / "config.json"
 
 WASABI_REPLY = "くっだらねえ！なんだよそれ！わっかわっかしい！"
+
+# ループの遅延（Discord API待ちやファイルI/Oでの一時的なブロッキング等）を吸収しつつ、
+# 予定時刻を過ぎた状態でBotを再起動したときに即座に投稿してしまわないための猶予
+POST_GRACE_PERIOD = timedelta(minutes=5)
 
 # 前方一致で判定するので、長いキーワードを先に置く（dictは挿入順を保つ）
 KEYWORD_REPLIES = {
@@ -72,7 +77,17 @@ def save_config(config: dict[str, Any]) -> None:
     with temp_path.open("w", encoding="utf-8") as file:
         json.dump(config, file, ensure_ascii=False, indent=2)
         file.write("\n")
-    temp_path.replace(CONFIG_PATH)
+
+    # Windowsではエディタやウイルス対策ソフトが一瞬ファイルをロックすることがあり、
+    # replace()が失敗すると投稿記録が保存されず再投稿の原因になるため短時間リトライする
+    for attempt in range(5):
+        try:
+            temp_path.replace(CONFIG_PATH)
+            return
+        except OSError:
+            if attempt == 4:
+                raise
+            time.sleep(0.2)
 
 
 class WasabiView(discord.ui.View):
@@ -254,6 +269,38 @@ async def wasabi(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(WASABI_REPLY)
 
 
+async def send_wasabi_post(client: WasabiBot, channel_id: int) -> None:
+    channel = client.get_channel(channel_id) or await client.fetch_channel(channel_id)
+    if not isinstance(channel, discord.abc.Messageable):
+        raise TypeError(f"Configured channel is not messageable: {channel_id}")
+
+    await channel.send("わさび", view=WasabiView())
+    # 前回分のボタン記録を捨てる。押下済みメッセージのボタンは既に消えているので、
+    # 残しておく意味があるのは「押下直後の同時押し」を弾く数秒間だけ。
+    client.processed_button_messages.clear()
+    client.button_locks.clear()
+
+
+@bot.tree.command(name="わさびを投稿する", description="デバッグ用: 自動投稿メッセージを今すぐ送信します。")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
+async def post_now(interaction: discord.Interaction) -> None:
+    config = load_config()
+    channel_id = config.get("channel_id")
+    if not channel_id:
+        await interaction.response.send_message("自動投稿先が設定されていません。", ephemeral=True)
+        return
+
+    try:
+        await send_wasabi_post(bot, int(channel_id))
+    except (TypeError, ValueError, discord.Forbidden, discord.HTTPException):
+        logger.exception("Failed to send debug post to channel %s", channel_id)
+        await interaction.response.send_message("投稿に失敗しました。ログを確認してください。", ephemeral=True)
+        return
+
+    await interaction.response.send_message("投稿しました。", ephemeral=True)
+
+
 @tasks.loop(seconds=30)
 async def daily_post(client: WasabiBot) -> None:
     config = load_config()
@@ -281,8 +328,9 @@ async def daily_post(client: WasabiBot) -> None:
             logger.warning("Configured post_time is invalid, skipping: %s", post_time)
             continue
 
+        scheduled_datetime = datetime.combine(now.date(), scheduled_time)
         if (
-            now.time() >= scheduled_time
+            scheduled_datetime <= now < scheduled_datetime + POST_GRACE_PERIOD
             and post_time not in posted_times
             and (today, post_time) not in client.last_posted
         ):
@@ -293,18 +341,7 @@ async def daily_post(client: WasabiBot) -> None:
         return
 
     try:
-        channel = client.get_channel(int(channel_id)) or await client.fetch_channel(
-            int(channel_id)
-        )
-        if not isinstance(channel, discord.abc.Messageable):
-            logger.warning("Configured channel is not messageable: %s", channel_id)
-            return
-
-        await channel.send("わさび", view=WasabiView())
-        # 前回分のボタン記録を捨てる。押下済みメッセージのボタンは既に消えているので、
-        # 残しておく意味があるのは「押下直後の同時押し」を弾く数秒間だけ。
-        client.processed_button_messages.clear()
-        client.button_locks.clear()
+        await send_wasabi_post(client, int(channel_id))
         client.last_posted.add((today, due_time))
         # send を待っている間に別の投稿処理が更新している可能性があるので読み直す
         config = load_config()
