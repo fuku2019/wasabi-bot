@@ -14,7 +14,7 @@ from discord.ext import tasks
 from dotenv import load_dotenv
 
 CONFIG_PATH = Path(__file__).parent / "config.json"
-TIME_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+TIME_PATTERN = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
 
 WASABI_REPLY = "くっだらねえ！なんだよそれ！わっかわっかしい！"
 
