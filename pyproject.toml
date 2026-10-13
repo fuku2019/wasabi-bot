@@ -1,5 +1,5 @@
 [project]
-name = "wasabi-discord-bot"
+name = "wasabi-bot"
 version = "0.1.0"
 description = "A Discord bot that posts wasabi messages on a schedule."
 readme = "README.md"

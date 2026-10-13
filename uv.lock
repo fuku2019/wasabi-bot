@@ -602,7 +602,7 @@ wheels = [
 ]
 
 [[package]]
-name = "wasabi-discord-bot"
+name = "wasabi-bot"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
