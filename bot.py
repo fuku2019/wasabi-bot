@@ -1,9 +1,11 @@
 import asyncio
+import copy
 import json
 import logging
 import os
+import re
 import time
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from datetime import time as datetime_time
 from pathlib import Path
 from typing import Any
@@ -32,12 +34,21 @@ KEYWORD_REPLIES = {
     "ｑさび": "もしかして: __わさび__",
 }
 
-DEFAULT_CONFIG: dict[str, Any] = {
+DEFAULT_GUILD_CONFIG: dict[str, Any] = {
     "channel_id": None,
     "post_times": ["00:00", "12:00", "06:00"],
     "last_post_date": None,
     "last_posted_times": [],
 }
+
+# 1日にこれ以上投稿させないための上限（連投防止）
+MAX_POST_TIMES = 24
+# \d は全角数字にも一致するので [0-9] で半角に限定する
+POST_TIME_PATTERN = re.compile(r"([0-9]{1,2}):([0-9]{2})")
+
+
+class ChannelNotMessageable(Exception):
+    """自動投稿先がメッセージを送れないチャンネル（カテゴリ等）だったときに投げる。"""
 
 
 logging.basicConfig(
@@ -47,27 +58,96 @@ logging.basicConfig(
 logger = logging.getLogger("wasabi-bot")
 
 
+def empty_config() -> dict[str, Any]:
+    return {"guilds": {}}
+
+
+def quarantine_config(label: str, reason: object) -> dict[str, Any]:
+    # 読めない設定を空として扱ったまま保存すると全サーバー分が消えるので、先に退避する。
+    # 退避に失敗した場合は OSError をそのまま上げ、呼び出し側に保存させない。
+    backup_path = CONFIG_PATH.with_name(f"{CONFIG_PATH.name}.{label}-{datetime.now():%Y%m%d-%H%M%S}")  # noqa: DTZ005
+    CONFIG_PATH.rename(backup_path)
+    logger.warning("config.json could not be used (%s). Moved it to %s.", reason, backup_path.name)
+    return empty_config()
+
+
 def load_config() -> dict[str, Any]:
     if not CONFIG_PATH.exists():
+        config = empty_config()
         try:
-            save_config(DEFAULT_CONFIG)
+            save_config(config)
         except OSError as error:
             # 設定は保存されないが、起動して応答だけはできるようにする
             logger.warning("Failed to create config.json. Settings will not persist: %s", error)
-        return DEFAULT_CONFIG.copy()
+        return config
 
+    # 退避（rename）する前にファイルを閉じておく必要がある（Windowsでは開いたままだと失敗する）
+    text = CONFIG_PATH.read_text(encoding="utf-8")
     try:
-        with CONFIG_PATH.open("r", encoding="utf-8") as file:
-            loaded = json.load(file)
-    except (json.JSONDecodeError, OSError) as error:
-        logger.warning("Failed to load config.json. Using defaults: %s", error)
-        return DEFAULT_CONFIG.copy()
+        loaded = json.loads(text)
+    except json.JSONDecodeError as error:
+        return quarantine_config("broken", error)
 
     if not isinstance(loaded, dict):
-        logger.warning("config.json is not a JSON object. Using defaults.")
-        return DEFAULT_CONFIG.copy()
+        return quarantine_config("broken", "not a JSON object")
+    if not isinstance(loaded.get("guilds"), dict):
+        # サーバーごとの設定に対応する前の形式。移行はせず、各サーバーで設定し直してもらう
+        return quarantine_config("legacy", "old single-server format")
 
-    return {**DEFAULT_CONFIG, **loaded}
+    return {"guilds": loaded["guilds"]}
+
+
+def get_guild_config(config: dict[str, Any], guild_id: int | str) -> dict[str, Any]:
+    stored = config["guilds"].get(str(guild_id))
+    if not isinstance(stored, dict):
+        stored = {}
+    return copy.deepcopy({**DEFAULT_GUILD_CONFIG, **stored})
+
+
+def update_guild_config(guild_id: int | str, **changes: Any) -> None:
+    # load から save まで await を挟まないので、他の処理が割り込んで上書きすることはない
+    config = load_config()
+    config["guilds"][str(guild_id)] = {**get_guild_config(config, guild_id), **changes}
+    save_config(config)
+
+
+def remove_guild_config(guild_id: int | str) -> None:
+    config = load_config()
+    if config["guilds"].pop(str(guild_id), None) is not None:
+        save_config(config)
+
+
+def posted_times_for_today(guild_config: dict[str, Any], today: str) -> list[str]:
+    # 日付が変わったら「今日投稿済みの時刻」はリセットする
+    if guild_config.get("last_post_date") != today:
+        return []
+    return list(guild_config.get("last_posted_times") or [])
+
+
+def parse_post_times(text: str) -> list[str]:
+    tokens = [token for token in re.split(r"[,、\s]+", text) if token]
+    if not tokens:
+        raise ValueError("投稿時刻が指定されていません。")
+
+    times: set[str] = set()
+    for token in tokens:
+        match = POST_TIME_PATTERN.fullmatch(token)
+        if match is None or int(match[1]) > 23 or int(match[2]) > 59:
+            raise ValueError(f"時刻の形式が正しくありません: {token}（例: 09:30）")
+        times.add(f"{int(match[1]):02d}:{match[2]}")
+
+    if len(times) > MAX_POST_TIMES:
+        raise ValueError(f"投稿時刻は{MAX_POST_TIMES}件までです。")
+    return sorted(times)
+
+
+def times_already_passed(times: list[str], now: datetime) -> list[str]:
+    # daily_post の投稿条件（scheduled <= now）とそろえ、ちょうど今の時刻も「過ぎた」側に含める
+    return [
+        post_time
+        for post_time in times
+        if datetime.combine(now.date(), datetime_time.fromisoformat(post_time)) <= now
+    ]
 
 
 def find_reply(content: str) -> str | None:
@@ -163,7 +243,8 @@ class WasabiBot(discord.Client):
         self.button_locks: dict[int, asyncio.Lock] = {}
         self.processed_button_messages: set[int] = set()
         # config.json への保存が失敗しても同じ枠を再投稿しないためのメモリ上の記録
-        self.last_posted: set[tuple[str, str]] = set()
+        # (guild_id, 日付, 時刻)
+        self.last_posted: set[tuple[str, str, str]] = set()
 
     async def setup_hook(self) -> None:
         self.add_view(WasabiView())
@@ -191,6 +272,15 @@ class WasabiBot(discord.Client):
     async def on_ready(self) -> None:
         logger.info("Logged in as %s (ID: %s)", self.user, self.user.id if self.user else "unknown")
         await self.change_presence(activity=discord.Game(name="わさび"))
+
+    async def on_guild_remove(self, guild: discord.Guild) -> None:
+        # 一時的な障害では on_guild_unavailable が呼ばれるだけなので、ここに来るのはキック・脱退時のみ
+        try:
+            remove_guild_config(guild.id)
+        except OSError:
+            logger.exception("Failed to remove settings for guild %s", guild.id)
+        else:
+            logger.info("Removed settings for guild %s", guild.id)
 
     async def on_message(self, message: discord.Message) -> None:
         # 自動投稿の「わさび」に自分で反応しないよう、Bot発言は全て無視する
@@ -249,23 +339,97 @@ async def send_next_once(
             await interaction.followup.send(mention_content, view=view)
 
 
+@bot.tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction,
+    error: app_commands.AppCommandError,
+) -> None:
+    if isinstance(error, app_commands.MissingPermissions):
+        message = "このコマンドにはサーバー管理権限が必要です。"
+    else:
+        logger.exception("Slash command failed", exc_info=error)
+        message = "エラーが発生しました。ログを確認してください。"
+
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except discord.HTTPException:
+        logger.exception("Failed to send error message for slash command")
+
+
 @bot.tree.command(name="set_channel", description="このチャンネルを自動投稿先に設定します。")
 @app_commands.guild_only()
 @app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
 async def set_channel(interaction: discord.Interaction) -> None:
-    if interaction.channel_id is None:
+    if interaction.guild_id is None or interaction.channel_id is None:
         await interaction.response.send_message(
             "チャンネルIDを取得できませんでした。",
             ephemeral=True,
         )
         return
 
-    config = load_config()
-    config["channel_id"] = interaction.channel_id
-    save_config(config)
+    update_guild_config(interaction.guild_id, channel_id=interaction.channel_id)
 
     await interaction.response.send_message(
         f"自動投稿先を <#{interaction.channel_id}> に設定しました。",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="set_times", description="自動投稿の時刻を設定します。")
+@app_commands.describe(times="投稿時刻をカンマ区切りで指定（例: 00:00, 12:00, 18:30）")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def set_times(interaction: discord.Interaction, times: str) -> None:
+    if interaction.guild_id is None:
+        await interaction.response.send_message("サーバーIDを取得できませんでした。", ephemeral=True)
+        return
+
+    try:
+        post_times = parse_post_times(times)
+    except ValueError as error:
+        await interaction.response.send_message(str(error), ephemeral=True)
+        return
+
+    # daily_post と同じ方法で「今」を決める（README参照）
+    now = datetime.now()  # noqa: DTZ005
+    today = now.date().isoformat()
+    # 今日すでに過ぎた時刻は投稿済み扱いにして、設定した直後に投稿されないようにする
+    passed_times = times_already_passed(post_times, now)
+    guild_config = get_guild_config(load_config(), interaction.guild_id)
+    update_guild_config(
+        interaction.guild_id,
+        post_times=post_times,
+        last_post_date=today,
+        last_posted_times=sorted({*posted_times_for_today(guild_config, today), *passed_times}),
+    )
+
+    message = f"投稿時刻を {', '.join(post_times)} に設定しました。"
+    if passed_times:
+        message += f"\n今日すでに過ぎた時刻（{', '.join(passed_times)}）は明日から投稿されます。"
+    await interaction.response.send_message(message, ephemeral=True)
+
+
+@bot.tree.command(name="show_settings", description="このサーバーの自動投稿の設定を表示します。")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def show_settings(interaction: discord.Interaction) -> None:
+    if interaction.guild_id is None:
+        await interaction.response.send_message("サーバーIDを取得できませんでした。", ephemeral=True)
+        return
+
+    guild_config = get_guild_config(load_config(), interaction.guild_id)
+    channel_id = guild_config["channel_id"]
+    channel_text = f"<#{channel_id}>" if channel_id else "未設定（/set_channel で設定してください）"
+    times_text = ", ".join(guild_config["post_times"] or []) or "なし"
+
+    await interaction.response.send_message(
+        f"自動投稿先: {channel_text}\n投稿時刻: {times_text}\n※ 時刻はBotを動かしている環境のローカル時刻です。",
         ephemeral=True,
     )
 
@@ -278,7 +442,7 @@ async def wasabi(interaction: discord.Interaction) -> None:
 async def send_wasabi_post(client: WasabiBot, channel_id: int) -> None:
     channel = client.get_channel(channel_id) or await client.fetch_channel(channel_id)
     if not isinstance(channel, discord.abc.Messageable):
-        raise TypeError(f"Configured channel is not messageable: {channel_id}")
+        raise ChannelNotMessageable(f"Configured channel is not messageable: {channel_id}")
 
     await channel.send("わさび", view=WasabiView())
     # 前回分のボタン記録を捨てる。押下済みメッセージのボタンは既に消えているので、
@@ -290,16 +454,23 @@ async def send_wasabi_post(client: WasabiBot, channel_id: int) -> None:
 @bot.tree.command(name="わさびを投稿する", description="デバッグ用: 自動投稿メッセージを今すぐ送信します。")
 @app_commands.guild_only()
 @app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
 async def post_now(interaction: discord.Interaction) -> None:
-    config = load_config()
-    channel_id = config.get("channel_id")
+    if interaction.guild_id is None:
+        await interaction.response.send_message("サーバーIDを取得できませんでした。", ephemeral=True)
+        return
+
+    channel_id = get_guild_config(load_config(), interaction.guild_id)["channel_id"]
     if not channel_id:
-        await interaction.response.send_message("自動投稿先が設定されていません。", ephemeral=True)
+        await interaction.response.send_message(
+            "自動投稿先が設定されていません。先に /set_channel を実行してください。",
+            ephemeral=True,
+        )
         return
 
     try:
         await send_wasabi_post(bot, int(channel_id))
-    except (TypeError, ValueError, discord.Forbidden, discord.HTTPException):
+    except (ValueError, ChannelNotMessageable, discord.HTTPException):
         logger.exception("Failed to send debug post to channel %s", channel_id)
         await interaction.response.send_message("投稿に失敗しました。ログを確認してください。", ephemeral=True)
         return
@@ -307,38 +478,44 @@ async def post_now(interaction: discord.Interaction) -> None:
     await interaction.response.send_message("投稿しました。", ephemeral=True)
 
 
-@tasks.loop(seconds=30)
-async def daily_post(client: WasabiBot) -> None:
-    config = load_config()
-    channel_id = config.get("channel_id")
-    post_times = config.get("post_times") or []
-
+async def post_for_guild(
+    client: WasabiBot,
+    guild_id: str,
+    guild_config: dict[str, Any],
+    now: datetime,
+    today: str,
+) -> None:
+    channel_id = guild_config["channel_id"]
+    post_times = guild_config["post_times"] or []
     if not channel_id or not post_times:
         return
 
-    # 投稿時刻はBotを動かしている環境のローカル時刻で判定する（README参照）
-    now = datetime.now()  # noqa: DTZ005
-    today = date.today().isoformat()  # noqa: DTZ011
+    try:
+        guild = client.get_guild(int(guild_id))
+        channel_id = int(channel_id)
+    except (TypeError, ValueError):
+        logger.warning("Invalid guild_id or channel_id in config.json: %s / %s", guild_id, channel_id)
+        return
 
-    # 日付が変わったら「今日投稿済みの時刻」はリセットする
-    posted_times: list[str] = (
-        config.get("last_posted_times") or [] if config.get("last_post_date") == today else []
-    )
-    client.last_posted = {entry for entry in client.last_posted if entry[0] == today}
+    # 脱退済みのサーバー（on_guild_remove を取りこぼした場合など）には投稿しない
+    if guild is None:
+        return
+
+    posted_times = posted_times_for_today(guild_config, today)
 
     due_time: str | None = None
     for post_time in post_times:
         try:
             scheduled_time = datetime_time.fromisoformat(post_time)
         except ValueError:
-            logger.warning("Configured post_time is invalid, skipping: %s", post_time)
+            logger.warning("Configured post_time is invalid in guild %s, skipping: %s", guild_id, post_time)
             continue
 
         scheduled_datetime = datetime.combine(now.date(), scheduled_time)
         if (
             scheduled_datetime <= now < scheduled_datetime + POST_GRACE_PERIOD
             and post_time not in posted_times
-            and (today, post_time) not in client.last_posted
+            and (guild_id, today, post_time) not in client.last_posted
         ):
             due_time = post_time
             break
@@ -347,22 +524,55 @@ async def daily_post(client: WasabiBot) -> None:
         return
 
     try:
-        await send_wasabi_post(client, int(channel_id))
-        client.last_posted.add((today, due_time))
-        # send を待っている間に別の投稿処理が更新している可能性があるので読み直す
-        config = load_config()
-        config["last_post_date"] = today
-        config["last_posted_times"] = sorted({*posted_times, due_time})
-        save_config(config)
-        logger.info("Posted daily wasabi message to channel %s (%s)", channel_id, due_time)
-    except (TypeError, ValueError):
-        logger.exception("Configured channel_id is invalid: %s", channel_id)
-    except discord.Forbidden:
-        logger.exception("Missing permission to send messages to channel %s", channel_id)
+        await send_wasabi_post(client, channel_id)
+    except (discord.NotFound, discord.Forbidden, ChannelNotMessageable) as error:
+        # 再試行しても失敗し続ける原因なので、猶予期間中にログが出続けないよう今回の枠は諦める
+        client.last_posted.add((guild_id, today, due_time))
+        logger.warning(
+            "Cannot post to channel %s in guild %s, skipping %s: %s",
+            channel_id,
+            guild_id,
+            due_time,
+            error,
+        )
+        return
     except discord.HTTPException:
-        logger.exception("Failed to send daily message to channel %s", channel_id)
+        # 一時的な障害の可能性があるので、猶予期間内なら次の周回で再試行する
+        logger.exception("Failed to send daily message to channel %s in guild %s", channel_id, guild_id)
+        return
+
+    # 保存が失敗しても同じ枠を再投稿しないよう、保存より先にメモリへ記録する
+    client.last_posted.add((guild_id, today, due_time))
+    logger.info("Posted daily wasabi message to channel %s in guild %s (%s)", channel_id, guild_id, due_time)
+
+    try:
+        # send を待っている間に /set_times 等で更新されている可能性があるので読み直す
+        current = get_guild_config(load_config(), guild_id)
+        update_guild_config(
+            guild_id,
+            last_post_date=today,
+            last_posted_times=sorted({*posted_times_for_today(current, today), due_time}),
+        )
     except OSError:
-        logger.exception("Failed to update config.json after posting")
+        logger.exception("Failed to update config.json after posting (guild %s)", guild_id)
+
+
+@tasks.loop(seconds=30)
+async def daily_post(client: WasabiBot) -> None:
+    try:
+        config = load_config()
+    except OSError:
+        # ここで例外を漏らすとループ自体が止まり、全サーバーの投稿が停止する
+        logger.exception("Failed to load config.json. Skipping this round.")
+        return
+
+    # 投稿時刻はBotを動かしている環境のローカル時刻で判定する（README参照）
+    now = datetime.now()  # noqa: DTZ005
+    today = now.date().isoformat()
+    client.last_posted = {entry for entry in client.last_posted if entry[1] == today}
+
+    for guild_id in config["guilds"]:
+        await post_for_guild(client, guild_id, get_guild_config(config, guild_id), now, today)
 
 
 @daily_post.error

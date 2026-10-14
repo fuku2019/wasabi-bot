@@ -2,6 +2,8 @@
 .env
 config.json
 *.json.tmp
+config.json.broken-*
+config.json.legacy-*
 
 # Python
 __pycache__/
