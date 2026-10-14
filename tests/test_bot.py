@@ -346,3 +346,49 @@ def test_post_for_guild_ignores_future_last_post_date(config_path, monkeypatch):
 
     # 時計の巻き戻り等で未来の日付が記録されていても、今日の枠は止めない
     assert len(channel.sent) == 1
+
+
+def test_rotate_presence_sets_custom_activity(monkeypatch):
+    client = wasabi.WasabiBot()
+    change_presence = AsyncMock()
+    monkeypatch.setattr(client, "change_presence", change_presence)
+
+    asyncio.run(wasabi.rotate_presence.coro(client))
+
+    activity = change_presence.call_args.kwargs["activity"]
+    assert isinstance(activity, discord.CustomActivity)
+    assert activity.name in wasabi.PRESENCE_TEXTS
+    assert client.presence_text == activity.name
+
+
+def test_rotate_presence_avoids_same_text_in_a_row(monkeypatch):
+    client = wasabi.WasabiBot()
+    client.presence_text = wasabi.PRESENCE_TEXTS[0]
+    change_presence = AsyncMock()
+    monkeypatch.setattr(client, "change_presence", change_presence)
+
+    asyncio.run(wasabi.rotate_presence.coro(client))
+
+    assert change_presence.call_args.kwargs["activity"].name != wasabi.PRESENCE_TEXTS[0]
+
+
+def test_rotate_presence_allows_repeat_with_single_text(monkeypatch):
+    monkeypatch.setattr(wasabi, "PRESENCE_TEXTS", ["わさび"])
+    client = wasabi.WasabiBot()
+    client.presence_text = "わさび"
+    change_presence = AsyncMock()
+    monkeypatch.setattr(client, "change_presence", change_presence)
+
+    asyncio.run(wasabi.rotate_presence.coro(client))
+
+    assert change_presence.call_args.kwargs["activity"].name == "わさび"
+
+
+def test_rotate_presence_survives_change_presence_error(monkeypatch):
+    client = wasabi.WasabiBot()
+    monkeypatch.setattr(client, "change_presence", AsyncMock(side_effect=RuntimeError("boom")))
+
+    # 例外が漏れると tasks.loop ごと止まり、以後ステータスが切り替わらなくなる
+    asyncio.run(wasabi.rotate_presence.coro(client))
+
+    assert client.presence_text is None

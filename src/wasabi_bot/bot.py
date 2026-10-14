@@ -1,5 +1,6 @@
 import logging
 import os
+import random
 import time
 from datetime import datetime, timedelta
 from datetime import time as datetime_time
@@ -37,6 +38,12 @@ from wasabi_bot.replies import (
 
 # 押下済みボタンの記録を残す秒数。弾きたいのは押下直後の同時押しだけなので短くてよい
 BUTTON_DEDUP_SECONDS = 600
+
+# Botのステータスに表示する文言。rotate_presence がここからランダムに選ぶ
+PRESENCE_TEXTS = [
+    "わさびをプレイ中",
+    "わさび山ってなんだろう",
+]
 
 
 class ChannelNotMessageable(Exception):
@@ -127,6 +134,8 @@ class WasabiBot(discord.Client):
         # config.json への保存が失敗しても同じ枠を再投稿しないためのメモリ上の記録
         # (guild_id, 日付, 時刻)
         self.last_posted: set[tuple[str, str, str]] = set()
+        # 同じ文言が連続しないよう、直前に表示したステータス文言を覚えておく
+        self.presence_text: str | None = None
 
     async def setup_hook(self) -> None:
         for rare in (False, True):
@@ -151,10 +160,11 @@ class WasabiBot(discord.Client):
 
         if not daily_post.is_running():
             daily_post.start(self)
+        if not rotate_presence.is_running():
+            rotate_presence.start(self)
 
     async def on_ready(self) -> None:
         logger.info("Logged in as %s (ID: %s)", self.user, self.user.id if self.user else "unknown")
-        await self.change_presence(activity=discord.Game(name="わさび"))
 
     async def on_guild_remove(self, guild: discord.Guild) -> None:
         # 一時的な障害では on_guild_unavailable が呼ばれるだけなので、ここに来るのはキック・脱退時のみ
@@ -521,6 +531,29 @@ async def daily_post_error(error: Exception) -> None:
 
 @daily_post.before_loop
 async def before_daily_post() -> None:
+    await bot.wait_until_ready()
+
+
+@tasks.loop(minutes=30)
+async def rotate_presence(client: WasabiBot) -> None:
+    candidates = [text for text in PRESENCE_TEXTS if text != client.presence_text] or PRESENCE_TEXTS
+    text = random.choice(candidates)
+    try:
+        await client.change_presence(activity=discord.CustomActivity(name=text))
+    except Exception:
+        # tasks.loop は OSError 等以外の例外でループごと止まるので、ここで止めずに次の回に任せる
+        logger.exception("Failed to change presence")
+        return
+    client.presence_text = text
+
+
+@rotate_presence.error
+async def rotate_presence_error(error: Exception) -> None:
+    logger.exception("Presence loop failed unexpectedly", exc_info=error)
+
+
+@rotate_presence.before_loop
+async def before_rotate_presence() -> None:
     await bot.wait_until_ready()
 
 
