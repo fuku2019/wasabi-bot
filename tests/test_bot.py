@@ -172,3 +172,28 @@ def test_normal_button_chain_never_rare(monkeypatch):
     asyncio.run(wasabi.WasabiView().eat.callback(MagicMock()))
 
     assert sent == [replies.EAT_REPLY[0]]
+
+
+def test_daily_post_continues_after_guild_error(config_path, monkeypatch):
+    update_guild_config(1, channel_id=111)
+    update_guild_config(2, channel_id=222)
+    processed = []
+
+    async def fake_post_for_guild(client, guild_id, guild_config, now, today):
+        if guild_id == "1":
+            raise TypeError("broken post_times")
+        processed.append(guild_id)
+
+    monkeypatch.setattr(wasabi, "post_for_guild", fake_post_for_guild)
+
+    # 例外が漏れると tasks.loop ごと止まり、全サーバーの自動投稿が止まる
+    asyncio.run(wasabi.daily_post.coro(wasabi.WasabiBot()))
+
+    assert processed == ["2"]
+
+
+def test_daily_post_skips_undecodable_config(config_path):
+    config_path.write_bytes('{"guilds": {"1": {"memo": "わさび"}}}'.encode("shift_jis"))
+
+    # UnicodeDecodeError は OSError ではないので、別途捕まえないとループが止まる
+    asyncio.run(wasabi.daily_post.coro(wasabi.WasabiBot()))

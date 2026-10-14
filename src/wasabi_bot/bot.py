@@ -478,7 +478,8 @@ async def post_for_guild(
 async def daily_post(client: WasabiBot) -> None:
     try:
         config = load_config()
-    except OSError:
+    except (OSError, ValueError):
+        # UnicodeDecodeError は ValueError なので OSError だけでは捕まらない
         # ここで例外を漏らすとループ自体が止まり、全サーバーの投稿が停止する
         logger.exception("Failed to load config.json. Skipping this round.")
         return
@@ -489,7 +490,11 @@ async def daily_post(client: WasabiBot) -> None:
     client.last_posted = {entry for entry in client.last_posted if entry[1] == today}
 
     for guild_id in config["guilds"]:
-        await post_for_guild(client, guild_id, get_guild_config(config, guild_id), now, today)
+        try:
+            await post_for_guild(client, guild_id, get_guild_config(config, guild_id), now, today)
+        except Exception:
+            # tasks.loop は OSError 等以外の例外でループごと止まるので、1サーバーの不正設定で全サーバーを止めない
+            logger.exception("Unexpected error while posting for guild %s", guild_id)
 
 
 @daily_post.error
