@@ -78,7 +78,7 @@ class TissueView(discord.ui.View):
     ) -> None:
         await send_next_once(
             interaction,
-            "お前は許されないことした！",
+            "お前は許されないことした！:rage:",
             DirtyJokeView(),
         )
 
@@ -97,7 +97,7 @@ class DirtyJokeView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
-        await send_next_once(interaction, "すまん！悪かった！")
+        await send_next_once(interaction, "すまん！悪かった！:person_bowing:")
 
 
 class WasabiBot(discord.Client):
