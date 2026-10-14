@@ -157,7 +157,7 @@ class WasabiBot(discord.Client):
         reply = find_reply(message.content)
         if reply:
             try:
-                await message.channel.send(reply)
+                await message.reply(reply)
             except discord.Forbidden:
                 logger.warning("Missing permission to reply in channel %s", message.channel.id)
 
