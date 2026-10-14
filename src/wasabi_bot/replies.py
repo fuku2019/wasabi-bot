@@ -2,6 +2,7 @@ import random
 import unicodedata
 
 WASABI_REPLY = "くっだらねえ！なんだよそれ！わっかわっかしい！"
+MOSIKASITE = "もしかして: [わさび](https://www.google.com/search?q=わさび)"
 
 # (通常版, レア版) の組。自動投稿の時点で RARE_CHANCE の確率でレア版に決まり、その後のボタンの返信もレア版になる
 RARE_CHANCE = 0.01
@@ -17,12 +18,45 @@ DIRTY_JOKE_REPLY = (
 # キーワードと投稿はどちらも _normalize してから比較するので、全角/半角・大文字/小文字の違いは書き分け不要
 KEYWORD_REPLIES = {
     "ところてん": "つるつるてん🧑‍🦲",
+    "トコロテン": "ツルツルテン🧑‍🦲",
     "わらび餅": "わさび餅",
+    "わさび餅": "もしかして: [わらび餅](https://www.google.com/search?q=わらび餅)",
+    "わさびー": "もしかして: [ワラビー](https://www.google.com/search?q=ワラビー)",
     "わさび山": "さっさと完成させろ、このゴミカス!",
+    "1あさび": MOSIKASITE,
+    "2あさび": MOSIKASITE,
+    "3あさび": MOSIKASITE,
+    "くぁさび": MOSIKASITE,
+    "えあさび": MOSIKASITE,
+    "ああさび": MOSIKASITE,
+    "wqさび": MOSIKASITE,
+    "っwさび": MOSIKASITE,
+    "wっさび": MOSIKASITE,
+    "wzさび": MOSIKASITE,
+    "わえあび": MOSIKASITE,
+    "わああび": MOSIKASITE,
+    "わsqび": MOSIKASITE,
+    "わswび": MOSIKASITE,
+    "わっsび": MOSIKASITE,
+    "わszび": MOSIKASITE,
+    "わさvい": MOSIKASITE,
+    "わさb7": MOSIKASITE,
+    "わさb8": MOSIKASITE,
+    "わさb9": MOSIKASITE,
+    "わさbj": MOSIKASITE,
+    "わさbk": MOSIKASITE,
     "わさび": WASABI_REPLY,
-    "わだび": "もしかして: __わさび__",
-    "わさに": "もしかして: __わさび__",
-    "qさび": "もしかして: __わさび__",
+    "ささび": MOSIKASITE,
+    "わわび": MOSIKASITE,
+    "わだび": MOSIKASITE,
+    "わざび": MOSIKASITE,
+    "わぁび": MOSIKASITE,
+    "わさぎ": MOSIKASITE,
+    "わさひ": MOSIKASITE,
+    "わさに": MOSIKASITE,
+    "わさぶ": MOSIKASITE,
+    "わさぼ": MOSIKASITE,
+    "からし": "もしかして: [わさび](https://www.google.com/search?q=わさび)",
 }
 
 
