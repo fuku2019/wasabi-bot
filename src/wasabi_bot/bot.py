@@ -24,7 +24,16 @@ from wasabi_bot.post_times import (
     posted_times_for_today,
     times_already_passed,
 )
-from wasabi_bot.replies import WASABI_REPLY, find_reply
+from wasabi_bot.replies import (
+    DIRTY_JOKE_REPLY,
+    EAT_REPLY,
+    TISSUE_REPLY,
+    WASABI_POST,
+    WASABI_REPLY,
+    find_reply,
+    pick_message,
+    roll_rare,
+)
 
 # 押下済みボタンの記録を残す秒数。弾きたいのは押下直後の同時押しだけなので短くてよい
 BUTTON_DEDUP_SECONDS = 600
@@ -41,9 +50,20 @@ logging.basicConfig(
 logger = logging.getLogger("wasabi-bot")
 
 
-class WasabiView(discord.ui.View):
-    def __init__(self) -> None:
+class ButtonChainView(discord.ui.View):
+    """rare=True のときはボタンの返信をすべてレア版にする。"""
+
+    def __init__(self, rare: bool = False) -> None:
         super().__init__(timeout=None)
+        self.rare = rare
+        # Bot再起動後もどちらの版か区別できるよう、custom_id を分ける
+        if rare:
+            for item in self.children:
+                if isinstance(item, discord.ui.Button) and item.custom_id:
+                    item.custom_id += ":rare"
+
+
+class WasabiView(ButtonChainView):
 
     @discord.ui.button(
         label="食べる",
@@ -57,14 +77,12 @@ class WasabiView(discord.ui.View):
     ) -> None:
         await send_next_once(
             interaction,
-            "鼻がツーンとした！",
-            TissueView(),
+            pick_message(EAT_REPLY, rare=self.rare),
+            TissueView(rare=self.rare),
         )
 
 
-class TissueView(discord.ui.View):
-    def __init__(self) -> None:
-        super().__init__(timeout=None)
+class TissueView(ButtonChainView):
 
     @discord.ui.button(
         label="ティッシュにぺ！ってする",
@@ -78,14 +96,12 @@ class TissueView(discord.ui.View):
     ) -> None:
         await send_next_once(
             interaction,
-            "お前は許されないことした！:rage:",
-            DirtyJokeView(),
+            pick_message(TISSUE_REPLY, rare=self.rare),
+            DirtyJokeView(rare=self.rare),
         )
 
 
-class DirtyJokeView(discord.ui.View):
-    def __init__(self) -> None:
-        super().__init__(timeout=None)
+class DirtyJokeView(ButtonChainView):
 
     @discord.ui.button(
         label="下ネタを聞く",
@@ -97,7 +113,7 @@ class DirtyJokeView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
-        await send_next_once(interaction, "すまん！悪かった！:person_bowing:")
+        await send_next_once(interaction, pick_message(DIRTY_JOKE_REPLY, rare=self.rare))
 
 
 class WasabiBot(discord.Client):
@@ -114,9 +130,10 @@ class WasabiBot(discord.Client):
         self.last_posted: set[tuple[str, str, str]] = set()
 
     async def setup_hook(self) -> None:
-        self.add_view(WasabiView())
-        self.add_view(TissueView())
-        self.add_view(DirtyJokeView())
+        for rare in (False, True):
+            self.add_view(WasabiView(rare=rare))
+            self.add_view(TissueView(rare=rare))
+            self.add_view(DirtyJokeView(rare=rare))
 
         guild_id = os.getenv("DISCORD_GUILD_ID")
         if guild_id:
@@ -321,12 +338,14 @@ async def wasabi(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(WASABI_REPLY)
 
 
-async def send_wasabi_post(client: WasabiBot, channel_id: int) -> None:
+async def send_wasabi_post(client: WasabiBot, channel_id: int, rare: bool = False) -> None:
     channel = client.get_channel(channel_id) or await client.fetch_channel(channel_id)
     if not isinstance(channel, discord.abc.Messageable):
         raise ChannelNotMessageable(f"Configured channel is not messageable: {channel_id}")
 
-    await channel.send("わさび", view=WasabiView())
+    # 抽選は投稿時の1回だけ。レア版が出たらボタンの返信も最後までレア版になる
+    rare = rare or roll_rare()
+    await channel.send(pick_message(WASABI_POST, rare=rare), view=WasabiView(rare=rare))
 
 
 @bot.tree.command(name="わさびを投稿する", description="デバッグ用: 自動投稿メッセージを今すぐ送信します。")
@@ -334,6 +353,18 @@ async def send_wasabi_post(client: WasabiBot, channel_id: int) -> None:
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.checks.has_permissions(manage_guild=True)
 async def post_now(interaction: discord.Interaction) -> None:
+    await post_debug_wasabi(interaction, rare=False)
+
+
+@bot.tree.command(name="レアわさびを投稿する", description="デバッグ用: レア版の自動投稿メッセージを今すぐ送信します。")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def post_rare_now(interaction: discord.Interaction) -> None:
+    await post_debug_wasabi(interaction, rare=True)
+
+
+async def post_debug_wasabi(interaction: discord.Interaction, rare: bool) -> None:
     if interaction.guild_id is None:
         await interaction.response.send_message("サーバーIDを取得できませんでした。", ephemeral=True)
         return
@@ -355,7 +386,7 @@ async def post_now(interaction: discord.Interaction) -> None:
     await interaction.response.defer(ephemeral=True, thinking=True)
 
     try:
-        await send_wasabi_post(client, int(channel_id))
+        await send_wasabi_post(client, int(channel_id), rare=rare)
     except (ValueError, ChannelNotMessageable, discord.HTTPException):
         logger.exception("Failed to send debug post to channel %s", channel_id)
         await interaction.followup.send("投稿に失敗しました。ログを確認してください。", ephemeral=True)

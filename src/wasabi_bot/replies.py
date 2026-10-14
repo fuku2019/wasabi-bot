@@ -1,6 +1,17 @@
+import random
 import unicodedata
 
 WASABI_REPLY = "くっだらねえ！なんだよそれ！わっかわっかしい！"
+
+# (通常版, レア版) の組。自動投稿の時点で RARE_CHANCE の確率でレア版に決まり、その後のボタンの返信もレア版になる
+RARE_CHANCE = 0.01
+WASABI_POST = ("わさび", "本わさび")
+EAT_REPLY = ("鼻がツーンとした！", "鼻がツーンとしなかった！")
+TISSUE_REPLY = ("お前は許されないことした！:rage:", "お前は絶対に許されないことした！:rage::rage::rage:")
+DIRTY_JOKE_REPLY = (
+    "すまん！悪かった！:person_bowing:",
+    "本当にすまん！悪かった！:person_bowing::person_bowing::person_bowing:",
+)
 
 # 前方一致で判定するので、長いキーワードを先に置く（dictは挿入順を保つ）
 # キーワードと投稿はどちらも _normalize してから比較するので、全角/半角・大文字/小文字の違いは書き分け不要
@@ -29,3 +40,12 @@ def find_reply(content: str) -> str | None:
         if content.startswith(keyword):
             return reply
     return None
+
+
+def roll_rare() -> bool:
+    return random.random() < RARE_CHANCE
+
+
+def pick_message(messages: tuple[str, str], rare: bool) -> str:
+    normal, rare_message = messages
+    return rare_message if rare else normal
