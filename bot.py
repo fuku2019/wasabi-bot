@@ -45,6 +45,8 @@ DEFAULT_GUILD_CONFIG: dict[str, Any] = {
 MAX_POST_TIMES = 24
 # \d は全角数字にも一致するので [0-9] で半角に限定する
 POST_TIME_PATTERN = re.compile(r"([0-9]{1,2}):([0-9]{2})")
+# 押下済みボタンの記録を残す秒数。弾きたいのは押下直後の同時押しだけなので短くてよい
+BUTTON_DEDUP_SECONDS = 600
 
 
 class ChannelNotMessageable(Exception):
@@ -150,6 +152,21 @@ def times_already_passed(times: list[str], now: datetime) -> list[str]:
     ]
 
 
+def mark_passed_times_as_posted(
+    guild_config: dict[str, Any],
+    post_times: list[str],
+    now: datetime,
+) -> dict[str, Any]:
+    # 今日すでに過ぎた時刻は投稿済み扱いにして、設定した直後に投稿されないようにする
+    today = now.date().isoformat()
+    return {
+        "last_post_date": today,
+        "last_posted_times": sorted(
+            {*posted_times_for_today(guild_config, today), *times_already_passed(post_times, now)},
+        ),
+    }
+
+
 def find_reply(content: str) -> str | None:
     for keyword, reply in KEYWORD_REPLIES.items():
         if content.startswith(keyword):
@@ -241,7 +258,8 @@ class WasabiBot(discord.Client):
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.button_locks: dict[int, asyncio.Lock] = {}
-        self.processed_button_messages: set[int] = set()
+        # message_id -> 押下時刻（time.monotonic()）
+        self.processed_button_messages: dict[int, float] = {}
         # config.json への保存が失敗しても同じ枠を再投稿しないためのメモリ上の記録
         # (guild_id, 日付, 時刻)
         self.last_posted: set[tuple[str, str, str]] = set()
@@ -318,25 +336,36 @@ async def send_next_once(
         )
         return
 
+    now = time.monotonic()
+    client.processed_button_messages = {
+        processed_id: pressed_at
+        for processed_id, pressed_at in client.processed_button_messages.items()
+        if now - pressed_at < BUTTON_DEDUP_SECONDS
+    }
+
     message_id = interaction.message.id
     lock = client.button_locks.setdefault(message_id, asyncio.Lock())
 
-    async with lock:
-        if message_id in client.processed_button_messages:
-            await interaction.response.send_message(
-                "このボタンはすでに押されています。",
-                ephemeral=True,
-            )
-            return
+    try:
+        async with lock:
+            if message_id in client.processed_button_messages:
+                await interaction.response.send_message(
+                    "このボタンはすでに押されています。",
+                    ephemeral=True,
+                )
+                return
 
-        # edit_message が失敗したら処理済みにしない（ボタンが押せないまま死ぬのを防ぐ）
-        await interaction.response.edit_message(view=None)
-        client.processed_button_messages.add(message_id)
-        mention_content = f"{interaction.user.mention}が押しました\n{content}"
-        if view is None:
-            await interaction.followup.send(mention_content)
-        else:
-            await interaction.followup.send(mention_content, view=view)
+            # edit_message が失敗したら処理済みにしない（ボタンが押せないまま死ぬのを防ぐ）
+            await interaction.response.edit_message(view=None)
+            client.processed_button_messages[message_id] = now
+            mention_content = f"{interaction.user.mention}が押しました\n{content}"
+            if view is None:
+                await interaction.followup.send(mention_content)
+            else:
+                await interaction.followup.send(mention_content, view=view)
+    finally:
+        # 待機中の押下は同じ Lock を持っており、後から来た押下も processed で弾かれるので捨ててよい
+        client.button_locks.pop(message_id, None)
 
 
 @bot.tree.error
@@ -371,7 +400,14 @@ async def set_channel(interaction: discord.Interaction) -> None:
         )
         return
 
-    update_guild_config(interaction.guild_id, channel_id=interaction.channel_id)
+    # daily_post と同じ方法で「今」を決める（README参照）
+    now = datetime.now()  # noqa: DTZ005
+    guild_config = get_guild_config(load_config(), interaction.guild_id)
+    update_guild_config(
+        interaction.guild_id,
+        channel_id=interaction.channel_id,
+        **mark_passed_times_as_posted(guild_config, guild_config["post_times"] or [], now),
+    )
 
     await interaction.response.send_message(
         f"自動投稿先を <#{interaction.channel_id}> に設定しました。",
@@ -397,15 +433,12 @@ async def set_times(interaction: discord.Interaction, times: str) -> None:
 
     # daily_post と同じ方法で「今」を決める（README参照）
     now = datetime.now()  # noqa: DTZ005
-    today = now.date().isoformat()
-    # 今日すでに過ぎた時刻は投稿済み扱いにして、設定した直後に投稿されないようにする
     passed_times = times_already_passed(post_times, now)
     guild_config = get_guild_config(load_config(), interaction.guild_id)
     update_guild_config(
         interaction.guild_id,
         post_times=post_times,
-        last_post_date=today,
-        last_posted_times=sorted({*posted_times_for_today(guild_config, today), *passed_times}),
+        **mark_passed_times_as_posted(guild_config, post_times, now),
     )
 
     message = f"投稿時刻を {', '.join(post_times)} に設定しました。"
@@ -445,10 +478,6 @@ async def send_wasabi_post(client: WasabiBot, channel_id: int) -> None:
         raise ChannelNotMessageable(f"Configured channel is not messageable: {channel_id}")
 
     await channel.send("わさび", view=WasabiView())
-    # 前回分のボタン記録を捨てる。押下済みメッセージのボタンは既に消えているので、
-    # 残しておく意味があるのは「押下直後の同時押し」を弾く数秒間だけ。
-    client.processed_button_messages.clear()
-    client.button_locks.clear()
 
 
 @bot.tree.command(name="わさびを投稿する", description="デバッグ用: 自動投稿メッセージを今すぐ送信します。")
@@ -468,14 +497,22 @@ async def post_now(interaction: discord.Interaction) -> None:
         )
         return
 
-    try:
-        await send_wasabi_post(bot, int(channel_id))
-    except (ValueError, ChannelNotMessageable, discord.HTTPException):
-        logger.exception("Failed to send debug post to channel %s", channel_id)
-        await interaction.response.send_message("投稿に失敗しました。ログを確認してください。", ephemeral=True)
+    client = interaction.client
+    if not isinstance(client, WasabiBot):
+        await interaction.response.send_message("Botの状態を取得できませんでした。", ephemeral=True)
         return
 
-    await interaction.response.send_message("投稿しました。", ephemeral=True)
+    # fetch_channel や送信が3秒を超えると応答が失効し、成功しても失敗表示になって再実行を招くので先に defer する
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    try:
+        await send_wasabi_post(client, int(channel_id))
+    except (ValueError, ChannelNotMessageable, discord.HTTPException):
+        logger.exception("Failed to send debug post to channel %s", channel_id)
+        await interaction.followup.send("投稿に失敗しました。ログを確認してください。", ephemeral=True)
+        return
+
+    await interaction.followup.send("投稿しました。", ephemeral=True)
 
 
 async def post_for_guild(
