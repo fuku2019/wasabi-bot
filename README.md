@@ -129,8 +129,15 @@ uv run --no-dev bot.py
 
 ```text
 .
-├── bot.py
+├── bot.py            # Discord まわり（起動・ボタン・コマンド・定期投稿）
+├── config.py         # config.json の読み書き
+├── post_times.py     # 投稿時刻のパース・判定
+├── replies.py        # キーワード応答
+├── conftest.py
 ├── test_bot.py
+├── test_config.py
+├── test_post_times.py
+├── test_replies.py
 ├── pyproject.toml
 ├── uv.lock
 ├── .python-version

@@ -1,13 +1,9 @@
 import asyncio
-import copy
-import json
 import logging
 import os
-import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from datetime import time as datetime_time
-from pathlib import Path
 from typing import Any
 
 import discord
@@ -15,36 +11,21 @@ from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
 
-CONFIG_PATH = Path(__file__).parent / "config.json"
+from config import (
+    get_guild_config,
+    load_config,
+    remove_guild_config,
+    update_guild_config,
+)
+from post_times import (
+    POST_GRACE_PERIOD,
+    mark_passed_times_as_posted,
+    parse_post_times,
+    posted_times_for_today,
+    times_already_passed,
+)
+from replies import WASABI_REPLY, find_reply
 
-WASABI_REPLY = "くっだらねえ！なんだよそれ！わっかわっかしい！"
-
-# ループの遅延（Discord API待ちやファイルI/Oでの一時的なブロッキング等）を吸収しつつ、
-# 予定時刻を過ぎた状態でBotを再起動したときに即座に投稿してしまわないための猶予
-POST_GRACE_PERIOD = timedelta(minutes=5)
-
-# 前方一致で判定するので、長いキーワードを先に置く（dictは挿入順を保つ）
-KEYWORD_REPLIES = {
-    "ところてん": "つるつるてん🧑‍🦲",
-    "わらび餅": "わさび餅",
-    "わさび山": "さっさと完成させろ、このゴミカス!",
-    "わさび": WASABI_REPLY,
-    "わだび": "もしかして: __わさび__",
-    "わさに": "もしかして: __わさび__",
-    "ｑさび": "もしかして: __わさび__",
-}
-
-DEFAULT_GUILD_CONFIG: dict[str, Any] = {
-    "channel_id": None,
-    "post_times": ["00:00", "12:00", "06:00"],
-    "last_post_date": None,
-    "last_posted_times": [],
-}
-
-# 1日にこれ以上投稿させないための上限（連投防止）
-MAX_POST_TIMES = 24
-# \d は全角数字にも一致するので [0-9] で半角に限定する
-POST_TIME_PATTERN = re.compile(r"([0-9]{1,2}):([0-9]{2})")
 # 押下済みボタンの記録を残す秒数。弾きたいのは押下直後の同時押しだけなので短くてよい
 BUTTON_DEDUP_SECONDS = 600
 
@@ -58,138 +39,6 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("wasabi-bot")
-
-
-def empty_config() -> dict[str, Any]:
-    return {"guilds": {}}
-
-
-def quarantine_config(label: str, reason: object) -> dict[str, Any]:
-    # 読めない設定を空として扱ったまま保存すると全サーバー分が消えるので、先に退避する。
-    # 退避に失敗した場合は OSError をそのまま上げ、呼び出し側に保存させない。
-    backup_path = CONFIG_PATH.with_name(f"{CONFIG_PATH.name}.{label}-{datetime.now():%Y%m%d-%H%M%S}")  # noqa: DTZ005
-    CONFIG_PATH.rename(backup_path)
-    logger.warning("config.json could not be used (%s). Moved it to %s.", reason, backup_path.name)
-    return empty_config()
-
-
-def load_config() -> dict[str, Any]:
-    if not CONFIG_PATH.exists():
-        config = empty_config()
-        try:
-            save_config(config)
-        except OSError as error:
-            # 設定は保存されないが、起動して応答だけはできるようにする
-            logger.warning("Failed to create config.json. Settings will not persist: %s", error)
-        return config
-
-    # 退避（rename）する前にファイルを閉じておく必要がある（Windowsでは開いたままだと失敗する）
-    text = CONFIG_PATH.read_text(encoding="utf-8")
-    try:
-        loaded = json.loads(text)
-    except json.JSONDecodeError as error:
-        return quarantine_config("broken", error)
-
-    if not isinstance(loaded, dict):
-        return quarantine_config("broken", "not a JSON object")
-    if not isinstance(loaded.get("guilds"), dict):
-        # サーバーごとの設定に対応する前の形式。移行はせず、各サーバーで設定し直してもらう
-        return quarantine_config("legacy", "old single-server format")
-
-    return {"guilds": loaded["guilds"]}
-
-
-def get_guild_config(config: dict[str, Any], guild_id: int | str) -> dict[str, Any]:
-    stored = config["guilds"].get(str(guild_id))
-    if not isinstance(stored, dict):
-        stored = {}
-    return copy.deepcopy({**DEFAULT_GUILD_CONFIG, **stored})
-
-
-def update_guild_config(guild_id: int | str, **changes: Any) -> None:
-    # load から save まで await を挟まないので、他の処理が割り込んで上書きすることはない
-    config = load_config()
-    config["guilds"][str(guild_id)] = {**get_guild_config(config, guild_id), **changes}
-    save_config(config)
-
-
-def remove_guild_config(guild_id: int | str) -> None:
-    config = load_config()
-    if config["guilds"].pop(str(guild_id), None) is not None:
-        save_config(config)
-
-
-def posted_times_for_today(guild_config: dict[str, Any], today: str) -> list[str]:
-    # 日付が変わったら「今日投稿済みの時刻」はリセットする
-    if guild_config.get("last_post_date") != today:
-        return []
-    return list(guild_config.get("last_posted_times") or [])
-
-
-def parse_post_times(text: str) -> list[str]:
-    tokens = [token for token in re.split(r"[,、\s]+", text) if token]
-    if not tokens:
-        raise ValueError("投稿時刻が指定されていません。")
-
-    times: set[str] = set()
-    for token in tokens:
-        match = POST_TIME_PATTERN.fullmatch(token)
-        if match is None or int(match[1]) > 23 or int(match[2]) > 59:
-            raise ValueError(f"時刻の形式が正しくありません: {token}（例: 09:30）")
-        times.add(f"{int(match[1]):02d}:{match[2]}")
-
-    if len(times) > MAX_POST_TIMES:
-        raise ValueError(f"投稿時刻は{MAX_POST_TIMES}件までです。")
-    return sorted(times)
-
-
-def times_already_passed(times: list[str], now: datetime) -> list[str]:
-    # daily_post の投稿条件（scheduled <= now）とそろえ、ちょうど今の時刻も「過ぎた」側に含める
-    return [
-        post_time
-        for post_time in times
-        if datetime.combine(now.date(), datetime_time.fromisoformat(post_time)) <= now
-    ]
-
-
-def mark_passed_times_as_posted(
-    guild_config: dict[str, Any],
-    post_times: list[str],
-    now: datetime,
-) -> dict[str, Any]:
-    # 今日すでに過ぎた時刻は投稿済み扱いにして、設定した直後に投稿されないようにする
-    today = now.date().isoformat()
-    return {
-        "last_post_date": today,
-        "last_posted_times": sorted(
-            {*posted_times_for_today(guild_config, today), *times_already_passed(post_times, now)},
-        ),
-    }
-
-
-def find_reply(content: str) -> str | None:
-    for keyword, reply in KEYWORD_REPLIES.items():
-        if content.startswith(keyword):
-            return reply
-    return None
-
-
-def save_config(config: dict[str, Any]) -> None:
-    temp_path = CONFIG_PATH.with_suffix(".json.tmp")
-    with temp_path.open("w", encoding="utf-8") as file:
-        json.dump(config, file, ensure_ascii=False, indent=2)
-        file.write("\n")
-
-    # Windowsではエディタやウイルス対策ソフトが一瞬ファイルをロックすることがあり、
-    # replace()が失敗すると投稿記録が保存されず再投稿の原因になるため短時間リトライする
-    for attempt in range(5):
-        try:
-            temp_path.replace(CONFIG_PATH)
-            return
-        except OSError:
-            if attempt == 4:
-                raise
-            time.sleep(0.2)
 
 
 class WasabiView(discord.ui.View):
