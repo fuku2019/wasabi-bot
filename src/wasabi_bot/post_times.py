@@ -20,6 +20,13 @@ def posted_times_for_today(guild_config: dict[str, Any], today: str) -> list[str
     return list(guild_config.get("last_posted_times") or [])
 
 
+def is_slot_posted(guild_config: dict[str, Any], day: str, post_time: str, today: str) -> bool:
+    if day == today:
+        return post_time in posted_times_for_today(guild_config, today)
+    # 前日の枠（日付をまたいだ猶予期間中）。今日の記録があるなら、前日の枠は投稿済みか /set_times 等で処理済み
+    return guild_config.get("last_post_date") == today or post_time in posted_times_for_today(guild_config, day)
+
+
 def parse_post_times(text: str) -> list[str]:
     tokens = [token for token in re.split(r"[,、\s]+", text) if token]
     if not tokens:

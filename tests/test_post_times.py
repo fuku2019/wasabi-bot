@@ -57,3 +57,14 @@ def test_mark_passed_times_as_posted():
         "last_post_date": "2026-10-14",
         "last_posted_times": [],
     }
+
+
+def test_is_slot_posted():
+    guild_config = {"last_post_date": "2026-10-13", "last_posted_times": ["23:58"]}
+
+    assert post_times.is_slot_posted(guild_config, "2026-10-13", "23:58", "2026-10-14")
+    assert not post_times.is_slot_posted(guild_config, "2026-10-13", "23:59", "2026-10-14")
+    assert not post_times.is_slot_posted(guild_config, "2026-10-14", "23:58", "2026-10-14")
+    # 今日の記録があるなら前日の枠は処理済み
+    today_config = {"last_post_date": "2026-10-14", "last_posted_times": []}
+    assert post_times.is_slot_posted(today_config, "2026-10-13", "23:59", "2026-10-14")

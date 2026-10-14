@@ -1,11 +1,12 @@
 import asyncio
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
 from wasabi_bot import bot as wasabi
 from wasabi_bot import replies
-from wasabi_bot.config import update_guild_config
+from wasabi_bot.config import get_guild_config, load_config, update_guild_config
 
 
 class FakeChannel(discord.abc.Messageable):
@@ -70,7 +71,6 @@ def test_send_wasabi_post_keeps_button_state(monkeypatch):
     channel = FakeChannel()
     monkeypatch.setattr(client, "get_channel", lambda channel_id: channel)
     client.processed_button_messages[1] = 0.0
-    client.button_locks[2] = asyncio.Lock()
 
     monkeypatch.setattr(replies.random, "random", lambda: 0.5)
 
@@ -79,7 +79,6 @@ def test_send_wasabi_post_keeps_button_state(monkeypatch):
     # 別サーバーで押下処理中のボタンの重複チェックを壊さない
     assert channel.sent == ["わさび"]
     assert 1 in client.processed_button_messages
-    assert 2 in client.button_locks
 
 
 def test_post_rare_now_sends_rare_post(config_path, monkeypatch):
@@ -197,3 +196,153 @@ def test_daily_post_skips_undecodable_config(config_path):
 
     # UnicodeDecodeError は OSError ではないので、別途捕まえないとループが止まる
     asyncio.run(wasabi.daily_post.coro(wasabi.WasabiBot()))
+
+
+def make_button_interaction(client, message_id=10):
+    interaction = MagicMock()
+    interaction.client = client
+    interaction.message.id = message_id
+    interaction.user.mention = "<@1>"
+    interaction.response.edit_message = AsyncMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    return interaction
+
+
+def test_send_next_once_rejects_press_during_edit():
+    client = wasabi.WasabiBot()
+    first = make_button_interaction(client)
+    second = make_button_interaction(client)
+
+    async def run():
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_edit(**kwargs):
+            started.set()
+            await release.wait()
+
+        first.response.edit_message.side_effect = slow_edit
+        task = asyncio.create_task(wasabi.send_next_once(first, "鼻がツーンとした！"))
+        await started.wait()
+        await wasabi.send_next_once(second, "鼻がツーンとした！")
+        release.set()
+        await task
+
+    asyncio.run(run())
+
+    # 1回目の edit_message 中に来た押下は弾かれ、次のメッセージは1回だけ送られる
+    first.followup.send.assert_awaited_once()
+    second.response.edit_message.assert_not_awaited()
+    second.response.send_message.assert_awaited_once_with("このボタンはすでに押されています。", ephemeral=True)
+
+
+def test_send_next_once_allows_retry_after_edit_failure():
+    client = wasabi.WasabiBot()
+    failed = make_button_interaction(client)
+    failed.response.edit_message.side_effect = discord.HTTPException(MagicMock(status=500), "error")
+    retry = make_button_interaction(client)
+
+    async def run():
+        try:
+            await wasabi.send_next_once(failed, "鼻がツーンとした！")
+        except discord.HTTPException:
+            pass
+        await wasabi.send_next_once(retry, "鼻がツーンとした！")
+
+    asyncio.run(run())
+
+    # ボタンは残っているので、押し直せば処理される
+    failed.followup.send.assert_not_awaited()
+    retry.followup.send.assert_awaited_once()
+
+
+def test_sent_views_are_not_kept_registered(monkeypatch):
+    client = wasabi.WasabiBot()
+    channel = FakeChannel()
+    monkeypatch.setattr(client, "get_channel", lambda channel_id: channel)
+    interaction = make_button_interaction(client)
+
+    async def run():
+        await wasabi.send_wasabi_post(client, 111)
+        await wasabi.send_next_once(interaction, "鼻がツーンとした！", wasabi.TissueView())
+
+    asyncio.run(run())
+
+    # 押下は永続 View が処理するので、送信した View はメッセージごとに登録を残さない
+    assert channel.views[0].is_finished()
+    assert interaction.followup.send.await_args.kwargs["view"].is_finished()
+
+
+def local_time(*args):
+    return datetime(*args)  # noqa: DTZ001  Botはローカル時刻で判定する
+
+
+def run_post_for_guild(monkeypatch, client, guild_id, now):
+    channel = FakeChannel()
+    monkeypatch.setattr(client, "get_guild", lambda guild_id: object())
+    monkeypatch.setattr(client, "get_channel", lambda channel_id: channel)
+    today = now.date().isoformat()
+    guild_config = get_guild_config(load_config(), guild_id)
+    asyncio.run(wasabi.post_for_guild(client, str(guild_id), guild_config, now, today))
+    return channel
+
+
+def test_post_for_guild_posts_previous_day_slot_after_midnight(config_path, monkeypatch):
+    update_guild_config(1, channel_id=111, post_times=["23:58"], last_post_date="2026-10-13", last_posted_times=[])
+    client = wasabi.WasabiBot()
+
+    channel = run_post_for_guild(monkeypatch, client, 1, local_time(2026, 10, 14, 0, 1))
+
+    # 23:58 の猶予期間中に日付が変わっても投稿し、前日の枠として記録する
+    assert len(channel.sent) == 1
+    saved = get_guild_config(load_config(), 1)
+    assert (saved["last_post_date"], saved["last_posted_times"]) == ("2026-10-13", ["23:58"])
+
+
+def test_post_for_guild_posts_older_slot_first(config_path, monkeypatch):
+    update_guild_config(1, channel_id=111, post_times=["00:00", "23:58"], last_post_date=None, last_posted_times=[])
+    client = wasabi.WasabiBot()
+    now = local_time(2026, 10, 14, 0, 1)
+
+    run_post_for_guild(monkeypatch, client, 1, now)
+    assert ("1", "2026-10-13", "23:58") in client.last_posted
+    run_post_for_guild(monkeypatch, client, 1, now)
+    assert ("1", "2026-10-14", "00:00") in client.last_posted
+
+    saved = get_guild_config(load_config(), 1)
+    assert (saved["last_post_date"], saved["last_posted_times"]) == ("2026-10-14", ["00:00"])
+
+
+def test_post_for_guild_skips_previous_day_slot_when_today_recorded(config_path, monkeypatch):
+    update_guild_config(1, channel_id=111, post_times=["23:58"], last_post_date="2026-10-14", last_posted_times=[])
+
+    channel = run_post_for_guild(monkeypatch, wasabi.WasabiBot(), 1, local_time(2026, 10, 14, 0, 1))
+
+    # /set_times 等で今日の記録があるなら、前日の枠は処理済み
+    assert channel.sent == []
+
+
+def test_post_for_guild_keeps_today_record_written_during_send(config_path, monkeypatch):
+    update_guild_config(1, channel_id=111, post_times=["23:58"], last_post_date="2026-10-13", last_posted_times=[])
+    client = wasabi.WasabiBot()
+
+    async def send_while_set_times_runs(client, channel_id, rare=False):
+        update_guild_config(1, last_post_date="2026-10-14", last_posted_times=["00:00"])
+
+    monkeypatch.setattr(wasabi, "send_wasabi_post", send_while_set_times_runs)
+
+    run_post_for_guild(monkeypatch, client, 1, local_time(2026, 10, 14, 0, 1))
+
+    # 前日の記録で上書きすると今日の 00:00 が再投稿されるので、今日の記録を残す
+    saved = get_guild_config(load_config(), 1)
+    assert (saved["last_post_date"], saved["last_posted_times"]) == ("2026-10-14", ["00:00"])
+
+
+def test_post_for_guild_ignores_future_last_post_date(config_path, monkeypatch):
+    update_guild_config(1, channel_id=111, post_times=["12:00"], last_post_date="2026-12-31", last_posted_times=["12:00"])
+
+    channel = run_post_for_guild(monkeypatch, wasabi.WasabiBot(), 1, local_time(2026, 10, 14, 12, 1))
+
+    # 時計の巻き戻り等で未来の日付が記録されていても、今日の枠は止めない
+    assert len(channel.sent) == 1

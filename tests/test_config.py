@@ -94,3 +94,11 @@ def test_load_config_survives_unwritable_dir(config_path, monkeypatch):
     monkeypatch.setattr(config, "save_config", deny)
 
     assert config.load_config() == {"guilds": {}}
+
+
+def test_load_config_accepts_utf8_bom(config_path):
+    config_path.write_text(json.dumps({"guilds": {"1": {"channel_id": 123}}}), encoding="utf-8-sig")
+
+    # Windows のエディタで保存された BOM 付きファイルを壊れた扱いで退避しない
+    assert config.get_guild_config(config.load_config(), 1)["channel_id"] == 123
+    assert list(config_path.parent.glob("config.json.broken-*")) == []

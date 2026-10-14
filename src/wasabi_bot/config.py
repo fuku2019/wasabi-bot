@@ -11,7 +11,7 @@ CONFIG_PATH = Path(__file__).resolve().parents[2] / "config.json"
 
 DEFAULT_GUILD_CONFIG: dict[str, Any] = {
     "channel_id": None,
-    "post_times": ["00:00", "12:00", "06:00"],
+    "post_times": ["00:00", "06:00", "12:00"],
     "last_post_date": None,
     "last_posted_times": [],
 }
@@ -43,7 +43,8 @@ def load_config() -> dict[str, Any]:
         return config
 
     # 退避（rename）する前にファイルを閉じておく必要がある（Windowsでは開いたままだと失敗する）
-    text = CONFIG_PATH.read_text(encoding="utf-8")
+    # Windows のエディタ等で BOM 付きで保存されても壊れた扱いにしないよう utf-8-sig で読む
+    text = CONFIG_PATH.read_text(encoding="utf-8-sig")
     try:
         loaded = json.loads(text)
     except json.JSONDecodeError as error:

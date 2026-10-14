@@ -1,8 +1,7 @@
-import asyncio
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from datetime import time as datetime_time
 from typing import Any
 
@@ -19,6 +18,7 @@ from wasabi_bot.config import (
 )
 from wasabi_bot.post_times import (
     POST_GRACE_PERIOD,
+    is_slot_posted,
     mark_passed_times_as_posted,
     parse_post_times,
     posted_times_for_today,
@@ -122,7 +122,6 @@ class WasabiBot(discord.Client):
         intents.message_content = True
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
-        self.button_locks: dict[int, asyncio.Lock] = {}
         # message_id -> 押下時刻（time.monotonic()）
         self.processed_button_messages: dict[int, float] = {}
         # config.json への保存が失敗しても同じ枠を再投稿しないためのメモリ上の記録
@@ -182,6 +181,12 @@ class WasabiBot(discord.Client):
 bot = WasabiBot()
 
 
+def release_sent_view(view: discord.ui.View) -> None:
+    # 送信時の View はメッセージごとに登録され、timeout=None なので自然には消えない。
+    # 押下は setup_hook で登録した永続 View が custom_id で処理する（再起動後と同じ経路）ので、ここで登録を外す
+    view.stop()
+
+
 async def send_next_once(
     interaction: discord.Interaction,
     content: str,
@@ -210,28 +215,29 @@ async def send_next_once(
     }
 
     message_id = interaction.message.id
-    lock = client.button_locks.setdefault(message_id, asyncio.Lock())
+    if message_id in client.processed_button_messages:
+        await interaction.response.send_message(
+            "このボタンはすでに押されています。",
+            ephemeral=True,
+        )
+        return
 
+    # 同時押しを弾くため await より先に印を付ける（チェックとの間に await がないので割り込まれない）
+    client.processed_button_messages[message_id] = now
     try:
-        async with lock:
-            if message_id in client.processed_button_messages:
-                await interaction.response.send_message(
-                    "このボタンはすでに押されています。",
-                    ephemeral=True,
-                )
-                return
+        await interaction.response.edit_message(view=None)
+    except Exception:
+        # ボタンは残っているので、押し直せるよう印を外す（待機中に付け直された別の押下の印は消さない）
+        if client.processed_button_messages.get(message_id) == now:
+            client.processed_button_messages.pop(message_id)
+        raise
 
-            # edit_message が失敗したら処理済みにしない（ボタンが押せないまま死ぬのを防ぐ）
-            await interaction.response.edit_message(view=None)
-            client.processed_button_messages[message_id] = now
-            mention_content = f"{interaction.user.mention}が押しました\n{content}"
-            if view is None:
-                await interaction.followup.send(mention_content)
-            else:
-                await interaction.followup.send(mention_content, view=view)
-    finally:
-        # 待機中の押下は同じ Lock を持っており、後から来た押下も processed で弾かれるので捨ててよい
-        client.button_locks.pop(message_id, None)
+    mention_content = f"{interaction.user.mention}が押しました\n{content}"
+    if view is None:
+        await interaction.followup.send(mention_content)
+    else:
+        await interaction.followup.send(mention_content, view=view)
+        release_sent_view(view)
 
 
 @bot.tree.error
@@ -345,7 +351,9 @@ async def send_wasabi_post(client: WasabiBot, channel_id: int, rare: bool = Fals
 
     # 抽選は投稿時の1回だけ。レア版が出たらボタンの返信も最後までレア版になる
     rare = rare or roll_rare()
-    await channel.send(pick_message(WASABI_POST, rare=rare), view=WasabiView(rare=rare))
+    view = WasabiView(rare=rare)
+    await channel.send(pick_message(WASABI_POST, rare=rare), view=view)
+    release_sent_view(view)
 
 
 @bot.tree.command(name="わさびを投稿する", description="デバッグ用: 自動投稿メッセージを今すぐ送信します。")
@@ -418,33 +426,37 @@ async def post_for_guild(
     if guild is None:
         return
 
-    posted_times = posted_times_for_today(guild_config, today)
-
-    due_time: str | None = None
+    # 各時刻の直近の枠（まだ来ていなければ前日の枠）を見る。猶予期間が日付をまたいでも（23:58 の枠を 0:01 に）投稿できる
+    due: tuple[datetime, str, str] | None = None
     for post_time in post_times:
         try:
             scheduled_time = datetime_time.fromisoformat(post_time)
-        except ValueError:
+        except (TypeError, ValueError):
             logger.warning("Configured post_time is invalid in guild %s, skipping: %s", guild_id, post_time)
             continue
 
         scheduled_datetime = datetime.combine(now.date(), scheduled_time)
+        if scheduled_datetime > now:
+            scheduled_datetime -= timedelta(days=1)
+        day = scheduled_datetime.date().isoformat()
         if (
-            scheduled_datetime <= now < scheduled_datetime + POST_GRACE_PERIOD
-            and post_time not in posted_times
-            and (guild_id, today, post_time) not in client.last_posted
+            now < scheduled_datetime + POST_GRACE_PERIOD
+            and not is_slot_posted(guild_config, day, post_time, today)
+            and (guild_id, day, post_time) not in client.last_posted
+            and (due is None or scheduled_datetime < due[0])
         ):
-            due_time = post_time
-            break
+            # 古い枠から順に投稿する（前日の 23:58 を今日の 0:00 より先に）
+            due = (scheduled_datetime, day, post_time)
 
-    if due_time is None:
+    if due is None:
         return
+    _, day, due_time = due
 
     try:
         await send_wasabi_post(client, channel_id)
     except (discord.NotFound, discord.Forbidden, ChannelNotMessageable) as error:
         # 再試行しても失敗し続ける原因なので、猶予期間中にログが出続けないよう今回の枠は諦める
-        client.last_posted.add((guild_id, today, due_time))
+        client.last_posted.add((guild_id, day, due_time))
         logger.warning(
             "Cannot post to channel %s in guild %s, skipping %s: %s",
             channel_id,
@@ -459,16 +471,19 @@ async def post_for_guild(
         return
 
     # 保存が失敗しても同じ枠を再投稿しないよう、保存より先にメモリへ記録する
-    client.last_posted.add((guild_id, today, due_time))
+    client.last_posted.add((guild_id, day, due_time))
     logger.info("Posted daily wasabi message to channel %s in guild %s (%s)", channel_id, guild_id, due_time)
 
     try:
         # send を待っている間に /set_times 等で更新されている可能性があるので読み直す
         current = get_guild_config(load_config(), guild_id)
+        if day != today and current["last_post_date"] == today:
+            # 今日の記録を前日の記録で上書きすると今日の枠が再投稿されるので保存しない（前日の枠は今日の記録で投稿済み扱いになる）
+            return
         update_guild_config(
             guild_id,
-            last_post_date=today,
-            last_posted_times=sorted({*posted_times_for_today(current, today), due_time}),
+            last_post_date=day,
+            last_posted_times=sorted({*posted_times_for_today(current, day), due_time}),
         )
     except OSError:
         logger.exception("Failed to update config.json after posting (guild %s)", guild_id)
@@ -487,7 +502,9 @@ async def daily_post(client: WasabiBot) -> None:
     # 投稿時刻はBotを動かしている環境のローカル時刻で判定する（README参照）
     now = datetime.now()  # noqa: DTZ005
     today = now.date().isoformat()
-    client.last_posted = {entry for entry in client.last_posted if entry[1] == today}
+    # 日付をまたいだ猶予期間中の前日の枠も二重投稿しないよう、前日分まで残す
+    yesterday = (now.date() - timedelta(days=1)).isoformat()
+    client.last_posted = {entry for entry in client.last_posted if entry[1] in (today, yesterday)}
 
     for guild_id in config["guilds"]:
         try:
