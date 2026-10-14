@@ -11,20 +11,20 @@ from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
 
-from config import (
+from wasabi_bot.config import (
     get_guild_config,
     load_config,
     remove_guild_config,
     update_guild_config,
 )
-from post_times import (
+from wasabi_bot.post_times import (
     POST_GRACE_PERIOD,
     mark_passed_times_as_posted,
     parse_post_times,
     posted_times_for_today,
     times_already_passed,
 )
-from replies import WASABI_REPLY, find_reply
+from wasabi_bot.replies import WASABI_REPLY, find_reply
 
 # 押下済みボタンの記録を残す秒数。弾きたいのは押下直後の同時押しだけなので短くてよい
 BUTTON_DEDUP_SECONDS = 600

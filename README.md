@@ -73,7 +73,7 @@ Windows (PowerShell):
 ```powershell
 Copy-Item .env.example .env
 notepad .env
-uv run bot.py
+uv run wasabi-bot
 ```
 
 macOS / Linux:
@@ -81,10 +81,10 @@ macOS / Linux:
 ```bash
 cp .env.example .env
 nano .env
-uv run bot.py
+uv run wasabi-bot
 ```
 
-2回目以降は `uv run bot.py` だけです。Pythonのバージョンは `.python-version`、依存のバージョンは `uv.lock` で固定されているので、別のマシンでも同じ環境が再現されます。
+2回目以降は `uv run wasabi-bot` だけです。Pythonのバージョンは `.python-version`、依存のバージョンは `uv.lock` で固定されているので、別のマシンでも同じ環境が再現されます。
 
 ## 開発
 
@@ -102,7 +102,7 @@ uv run ruff format .   # フォーマット
 
 ```bash
 uv sync --frozen --no-dev
-uv run --no-dev bot.py
+uv run --no-dev wasabi-bot
 ```
 
 `--frozen` はロックファイルを更新せずにそのまま使う指定です。開発環境に戻すときは `uv sync` を実行してください。
@@ -129,15 +129,19 @@ uv run --no-dev bot.py
 
 ```text
 .
-├── bot.py            # Discord まわり（起動・ボタン・コマンド・定期投稿）
-├── config.py         # config.json の読み書き
-├── post_times.py     # 投稿時刻のパース・判定
-├── replies.py        # キーワード応答
-├── conftest.py
-├── test_bot.py
-├── test_config.py
-├── test_post_times.py
-├── test_replies.py
+├── src/
+│   └── wasabi_bot/
+│       ├── __init__.py
+│       ├── bot.py          # Discord まわり（起動・ボタン・コマンド・定期投稿）
+│       ├── config.py       # config.json の読み書き
+│       ├── post_times.py   # 投稿時刻のパース・判定
+│       └── replies.py      # キーワード応答
+├── tests/
+│   ├── conftest.py
+│   ├── test_bot.py
+│   ├── test_config.py
+│   ├── test_post_times.py
+│   └── test_replies.py
 ├── pyproject.toml
 ├── uv.lock
 ├── .python-version

@@ -1,6 +1,6 @@
 import pytest
 
-import config
+from wasabi_bot import config
 
 
 @pytest.fixture

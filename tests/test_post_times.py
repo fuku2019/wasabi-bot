@@ -2,7 +2,7 @@ from datetime import datetime
 
 import pytest
 
-import post_times
+from wasabi_bot import post_times
 
 
 def test_posted_times_for_today():

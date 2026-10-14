@@ -6,7 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-CONFIG_PATH = Path(__file__).parent / "config.json"
+# src/wasabi_bot/config.py から見たプロジェクトルートに置く（uv は既定で editable install するので __file__ は src 内を指す）
+CONFIG_PATH = Path(__file__).resolve().parents[2] / "config.json"
 
 DEFAULT_GUILD_CONFIG: dict[str, Any] = {
     "channel_id": None,

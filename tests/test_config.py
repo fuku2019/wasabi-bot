@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-import config
+from wasabi_bot import config
 
 
 def test_load_config_creates_empty_config(config_path):

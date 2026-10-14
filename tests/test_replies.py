@@ -1,4 +1,4 @@
-import replies
+from wasabi_bot import replies
 
 
 def test_find_reply():

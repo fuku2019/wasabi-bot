@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
-import bot as wasabi
-from config import update_guild_config
+from wasabi_bot import bot as wasabi
+from wasabi_bot.config import update_guild_config
 
 
 class FakeChannel(discord.abc.Messageable):
