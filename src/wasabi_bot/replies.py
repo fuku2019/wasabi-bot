@@ -1,7 +1,7 @@
 import unicodedata
 
 WASABI_REPLY = "くっだらねえ！なんだよそれ！わっかわっかしい！"
-MOSIKASITE = "もしかして: [わさび](https://www.google.com/search?q=わさび)"
+MOSIKASITE = "もしかして: [わさび](https://ja.wikipedia.org/wiki/%E3%83%AF%E3%82%B5%E3%83%93)"
 
 # (通常版, レア版) の組。レアかどうかは自動投稿時に決まり（確率は config の rare_percent）、その後のボタンの返信もレア版になる
 WASABI_POST = ("わさび", "本わさび")
