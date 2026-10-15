@@ -4,7 +4,8 @@
       "channel_id": 234567890123456789,
       "post_times": ["00:00", "09:00", "12:00", "15:00"],
       "last_post_date": "2026-09-05",
-      "last_posted_times": ["00:00", "09:00"]
+      "last_posted_times": ["00:00", "09:00"],
+      "rare_percent": 1
     }
   }
 }

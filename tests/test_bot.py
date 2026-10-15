@@ -43,6 +43,7 @@ def test_post_now_defers_before_sending(config_path, monkeypatch):
         calls.append(("send", channel_id, rare))
 
     monkeypatch.setattr(wasabi, "send_wasabi_post", fake_send)
+    monkeypatch.setattr(wasabi.random, "random", lambda: 0.5)
 
     asyncio.run(wasabi.post_now.callback(interaction))
 
@@ -72,8 +73,6 @@ def test_send_wasabi_post_keeps_button_state(monkeypatch):
     monkeypatch.setattr(client, "get_channel", lambda channel_id: channel)
     client.processed_button_messages[1] = 0.0
 
-    monkeypatch.setattr(replies.random, "random", lambda: 0.5)
-
     asyncio.run(wasabi.send_wasabi_post(client, 111))
 
     # 別サーバーで押下処理中のボタンの重複チェックを壊さない
@@ -101,7 +100,7 @@ def test_send_wasabi_post_rare(monkeypatch):
     client = wasabi.WasabiBot()
     channel = FakeChannel()
     monkeypatch.setattr(client, "get_channel", lambda channel_id: channel)
-    monkeypatch.setattr(replies.random, "random", lambda: 0.5)  # 抽選に関係なくレア版になる
+    monkeypatch.setattr(wasabi.random, "random", lambda: 0.5)  # 抽選に関係なくレア版になる
 
     asyncio.run(wasabi.send_wasabi_post(client, 111, rare=True))
 
@@ -126,7 +125,6 @@ def test_rare_button_chain_stays_rare(monkeypatch):
         sent.append((content, view))
 
     monkeypatch.setattr(wasabi, "send_next_once", fake_send_next_once)
-    monkeypatch.setattr(replies.random, "random", lambda: 0.5)
 
     async def run():
         view = wasabi.WasabiView(rare=True)
@@ -144,19 +142,28 @@ def test_rare_button_chain_stays_rare(monkeypatch):
     assert all(view.rare for _, view in sent[:2])
 
 
-def test_send_wasabi_post_draws_rare_once(monkeypatch):
+def test_roll_rare(monkeypatch):
+    monkeypatch.setattr(wasabi.random, "random", lambda: 0.0)
+    assert wasabi.roll_rare(1)
+    assert not wasabi.roll_rare(0)  # 0% なら必ず通常版
+    monkeypatch.setattr(wasabi.random, "random", lambda: 0.01)
+    assert not wasabi.roll_rare(1)  # 境界値はレアにならない
+    monkeypatch.setattr(wasabi.random, "random", lambda: 0.99)
+    assert not wasabi.roll_rare(1)
+    assert wasabi.roll_rare(100)  # 100% なら必ずレア版
+
+
+def test_send_wasabi_post_does_not_draw(monkeypatch):
     client = wasabi.WasabiBot()
     channel = FakeChannel()
     monkeypatch.setattr(client, "get_channel", lambda channel_id: channel)
+    monkeypatch.setattr(wasabi.random, "random", lambda: 0.0)
 
-    monkeypatch.setattr(replies.random, "random", lambda: 0.0)
-    asyncio.run(wasabi.send_wasabi_post(client, 111))
-    monkeypatch.setattr(replies.random, "random", lambda: 0.5)
     asyncio.run(wasabi.send_wasabi_post(client, 111))
 
-    # 抽選に当たったときだけ本わさびになり、ボタンの返信もレア版に固定される
-    assert channel.sent == ["本わさび", "わさび"]
-    assert [view.rare for view in channel.views] == [True, False]
+    # 抽選は呼び出し側で行うので、rare を渡さなければ通常版
+    assert channel.sent == ["わさび"]
+    assert not channel.views[0].rare
 
 
 def test_normal_button_chain_never_rare(monkeypatch):
@@ -166,7 +173,7 @@ def test_normal_button_chain_never_rare(monkeypatch):
         sent.append(content)
 
     monkeypatch.setattr(wasabi, "send_next_once", fake_send_next_once)
-    monkeypatch.setattr(replies.random, "random", lambda: 0.0)  # ボタンでは抽選しない
+    monkeypatch.setattr(wasabi.random, "random", lambda: 0.0)  # ボタンでは抽選しない
 
     asyncio.run(wasabi.WasabiView().eat.callback(MagicMock()))
 
@@ -312,6 +319,45 @@ def test_post_for_guild_posts_older_slot_first(config_path, monkeypatch):
 
     saved = get_guild_config(load_config(), 1)
     assert (saved["last_post_date"], saved["last_posted_times"]) == ("2026-10-14", ["00:00"])
+
+
+def test_post_for_guild_draws_rare_with_guild_percent(config_path, monkeypatch):
+    update_guild_config(1, channel_id=111, post_times=["12:00"], rare_percent=30)
+    update_guild_config(2, channel_id=222, post_times=["12:00"], rare_percent=20)
+    monkeypatch.setattr(wasabi.random, "random", lambda: 0.25)
+    now = local_time(2026, 10, 14, 12, 1)
+
+    # 抽選に当たったときだけ本わさびになり、ボタンの返信もレア版に固定される
+    channel = run_post_for_guild(monkeypatch, wasabi.WasabiBot(), 1, now)
+    assert channel.sent == ["本わさび"]
+    assert channel.views[0].rare
+    channel = run_post_for_guild(monkeypatch, wasabi.WasabiBot(), 2, now)
+    assert channel.sent == ["わさび"]
+    assert not channel.views[0].rare
+
+
+def test_post_now_uses_guild_rare_percent(config_path, monkeypatch):
+    update_guild_config(1, channel_id=111, rare_percent=100)
+    interaction = make_post_now_interaction(wasabi.WasabiBot())
+    calls = []
+
+    async def fake_send(client, channel_id, rare=False):
+        calls.append(rare)
+
+    monkeypatch.setattr(wasabi, "send_wasabi_post", fake_send)
+
+    asyncio.run(wasabi.post_now.callback(interaction))
+
+    assert calls == [True]
+
+
+def test_set_rare_chance_saves_percent(config_path):
+    interaction = make_post_now_interaction(wasabi.WasabiBot())
+
+    asyncio.run(wasabi.set_rare_chance.callback(interaction, 5))
+
+    assert get_guild_config(load_config(), 1)["rare_percent"] == 5
+    interaction.response.send_message.assert_awaited_once_with("レア確率を 5% に設定しました。", ephemeral=True)
 
 
 def test_post_for_guild_skips_previous_day_slot_when_today_recorded(config_path, monkeypatch):

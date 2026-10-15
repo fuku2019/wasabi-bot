@@ -30,6 +30,16 @@ def test_get_guild_config_does_not_share_default_lists():
     assert "23:59" not in config.DEFAULT_GUILD_CONFIG["post_times"]
 
 
+@pytest.mark.parametrize("value", [0, 1, 100])
+def test_rare_percent_accepts_integer_percent(value):
+    assert config.rare_percent({"rare_percent": value}) == value
+
+
+@pytest.mark.parametrize("value", [True, False, 0.01, 1.0, "5", -1, 101, None])
+def test_rare_percent_falls_back_to_default(value):
+    assert config.rare_percent({"rare_percent": value}) == config.DEFAULT_GUILD_CONFIG["rare_percent"]
+
+
 def test_update_guild_config_keeps_other_guilds(config_path):
     config.update_guild_config(1, channel_id=111)
     config.update_guild_config(2, channel_id=222)

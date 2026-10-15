@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from wasabi_bot.config import (
     get_guild_config,
     load_config,
+    rare_percent,
     remove_guild_config,
     update_guild_config,
 )
@@ -33,7 +34,6 @@ from wasabi_bot.replies import (
     WASABI_REPLY,
     find_reply,
     pick_message,
-    roll_rare,
 )
 
 # 押下済みボタンの記録を残す秒数。弾きたいのは押下直後の同時押しだけなので短くてよい
@@ -344,9 +344,24 @@ async def show_settings(interaction: discord.Interaction) -> None:
     times_text = ", ".join(guild_config["post_times"] or []) or "なし"
 
     await interaction.response.send_message(
-        f"自動投稿先: {channel_text}\n投稿時刻: {times_text}\n※ 時刻はBotを動かしている環境のローカル時刻です。",
+        f"自動投稿先: {channel_text}\n投稿時刻: {times_text}\nレア確率: {rare_percent(guild_config)}%\n"
+        "※ 時刻はBotを動かしている環境のローカル時刻です。",
         ephemeral=True,
     )
+
+
+@bot.tree.command(name="set_rare_chance", description="自動投稿がレア版になる確率を設定します。")
+@app_commands.describe(percent="レアになる確率（%、0〜100）")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def set_rare_chance(interaction: discord.Interaction, percent: app_commands.Range[int, 0, 100]) -> None:
+    if interaction.guild_id is None:
+        await interaction.response.send_message("サーバーIDを取得できませんでした。", ephemeral=True)
+        return
+
+    update_guild_config(interaction.guild_id, rare_percent=percent)
+    await interaction.response.send_message(f"レア確率を {percent}% に設定しました。", ephemeral=True)
 
 
 @bot.tree.command(name="わさび", description="わさび")
@@ -354,13 +369,16 @@ async def wasabi(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(WASABI_REPLY)
 
 
+def roll_rare(percent: int) -> bool:
+    return random.random() < percent / 100
+
+
 async def send_wasabi_post(client: WasabiBot, channel_id: int, rare: bool = False) -> None:
     channel = client.get_channel(channel_id) or await client.fetch_channel(channel_id)
     if not isinstance(channel, discord.abc.Messageable):
         raise ChannelNotMessageable(f"Configured channel is not messageable: {channel_id}")
 
-    # 抽選は投稿時の1回だけ。レア版が出たらボタンの返信も最後までレア版になる
-    rare = rare or roll_rare()
+    # 抽選は呼び出し側で投稿時に1回だけ行う。レア版が出たらボタンの返信も最後までレア版になる
     view = WasabiView(rare=rare)
     await channel.send(pick_message(WASABI_POST, rare=rare), view=view)
     release_sent_view(view)
@@ -387,7 +405,8 @@ async def post_debug_wasabi(interaction: discord.Interaction, rare: bool) -> Non
         await interaction.response.send_message("サーバーIDを取得できませんでした。", ephemeral=True)
         return
 
-    channel_id = get_guild_config(load_config(), interaction.guild_id)["channel_id"]
+    guild_config = get_guild_config(load_config(), interaction.guild_id)
+    channel_id = guild_config["channel_id"]
     if not channel_id:
         await interaction.response.send_message(
             "自動投稿先が設定されていません。先に /set_channel を実行してください。",
@@ -404,7 +423,7 @@ async def post_debug_wasabi(interaction: discord.Interaction, rare: bool) -> Non
     await interaction.response.defer(ephemeral=True, thinking=True)
 
     try:
-        await send_wasabi_post(client, int(channel_id), rare=rare)
+        await send_wasabi_post(client, int(channel_id), rare=rare or roll_rare(rare_percent(guild_config)))
     except (ValueError, ChannelNotMessageable, discord.HTTPException):
         logger.exception("Failed to send debug post to channel %s", channel_id)
         await interaction.followup.send("投稿に失敗しました。ログを確認してください。", ephemeral=True)
@@ -463,7 +482,8 @@ async def post_for_guild(
     _, day, due_time = due
 
     try:
-        await send_wasabi_post(client, channel_id)
+        # 不正な rare_percent の警告が周回ごとに出ないよう、投稿するときだけ解釈する
+        await send_wasabi_post(client, channel_id, rare=roll_rare(rare_percent(guild_config)))
     except (discord.NotFound, discord.Forbidden, ChannelNotMessageable) as error:
         # 再試行しても失敗し続ける原因なので、猶予期間中にログが出続けないよう今回の枠は諦める
         client.last_posted.add((guild_id, day, due_time))

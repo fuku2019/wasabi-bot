@@ -17,15 +17,6 @@ def test_find_reply_ignores_width_and_case():
     assert replies.find_reply("Ｑさび") == typo  # 全角大文字
 
 
-def test_roll_rare(monkeypatch):
-    monkeypatch.setattr(replies.random, "random", lambda: 0.0)
-    assert replies.roll_rare()
-    monkeypatch.setattr(replies.random, "random", lambda: replies.RARE_CHANCE)
-    assert not replies.roll_rare()  # 境界値はレアにならない
-    monkeypatch.setattr(replies.random, "random", lambda: 0.99)
-    assert not replies.roll_rare()
-
-
 def test_pick_message():
     messages = ("通常", "レア")
     assert replies.pick_message(messages, rare=True) == "レア"

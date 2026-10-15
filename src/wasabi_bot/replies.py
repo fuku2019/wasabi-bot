@@ -1,11 +1,9 @@
-import random
 import unicodedata
 
 WASABI_REPLY = "くっだらねえ！なんだよそれ！わっかわっかしい！"
 MOSIKASITE = "もしかして: [わさび](https://www.google.com/search?q=わさび)"
 
-# (通常版, レア版) の組。自動投稿の時点で RARE_CHANCE の確率でレア版に決まり、その後のボタンの返信もレア版になる
-RARE_CHANCE = 0.01
+# (通常版, レア版) の組。レアかどうかは自動投稿時に決まり（確率は config の rare_percent）、その後のボタンの返信もレア版になる
 WASABI_POST = ("わさび", "本わさび")
 EAT_REPLY = ("鼻がツーンとした！", "鼻がツーンとしなかった！")
 TISSUE_REPLY = ("お前は許されないことした！:rage:", "お前は絶対に許されないことした！:rage::rage::rage:")
@@ -74,10 +72,6 @@ def find_reply(content: str) -> str | None:
         if content.startswith(keyword):
             return reply
     return None
-
-
-def roll_rare() -> bool:
-    return random.random() < RARE_CHANCE
 
 
 def pick_message(messages: tuple[str, str], rare: bool) -> str:

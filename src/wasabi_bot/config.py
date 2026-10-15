@@ -14,6 +14,8 @@ DEFAULT_GUILD_CONFIG: dict[str, Any] = {
     "post_times": ["00:00", "06:00", "12:00"],
     "last_post_date": None,
     "last_posted_times": [],
+    # 自動投稿がレア版になる確率（%）。/set_rare_chance で1%単位で設定する
+    "rare_percent": 1,
 }
 
 logger = logging.getLogger("wasabi-bot")
@@ -64,6 +66,16 @@ def get_guild_config(config: dict[str, Any], guild_id: int | str) -> dict[str, A
     if not isinstance(stored, dict):
         stored = {}
     return copy.deepcopy({**DEFAULT_GUILD_CONFIG, **stored})
+
+
+def rare_percent(guild_config: dict[str, Any]) -> int:
+    value = guild_config.get("rare_percent")
+    # bool は int のサブクラスなので先に弾く。0.01 のような小数も、黙って 0% にならないよう既定値に戻す
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100:
+        return value
+    default = DEFAULT_GUILD_CONFIG["rare_percent"]
+    logger.warning("rare_percent in config.json must be an integer from 0 to 100, using %s%%: %r", default, value)
+    return default
 
 
 def update_guild_config(guild_id: int | str, **changes: Any) -> None:
