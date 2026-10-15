@@ -10,11 +10,11 @@ def test_find_reply():
 
 
 def test_find_reply_ignores_width_and_case():
-    typo = "もしかして: __わさび__"
-    assert replies.find_reply("qさび") == typo
-    assert replies.find_reply("ｑさび") == typo  # 全角
-    assert replies.find_reply("Qさび") == typo  # 大文字
-    assert replies.find_reply("Ｑさび") == typo  # 全角大文字
+    typo = replies.MOSIKASITE
+    assert replies.find_reply("wqさび") == typo
+    assert replies.find_reply("ｗｑさび") == typo  # 全角
+    assert replies.find_reply("WQさび") == typo  # 大文字
+    assert replies.find_reply("ＷＱさび") == typo  # 全角大文字
 
 
 def test_pick_message():
