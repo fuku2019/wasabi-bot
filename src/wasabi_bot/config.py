@@ -44,12 +44,12 @@ def load_config() -> dict[str, Any]:
             logger.warning("Failed to create config.json. Settings will not persist: %s", error)
         return config
 
-    # 退避（rename）する前にファイルを閉じておく必要がある（Windowsでは開いたままだと失敗する）
+    # read_text は例外時もファイルを閉じてから上げるので、そのまま退避（rename）できる（Windowsでは開いたままだと失敗する）
     # Windows のエディタ等で BOM 付きで保存されても壊れた扱いにしないよう utf-8-sig で読む
-    text = CONFIG_PATH.read_text(encoding="utf-8-sig")
     try:
-        loaded = json.loads(text)
-    except json.JSONDecodeError as error:
+        loaded = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        # Shift_JIS など UTF-8 以外で保存されたファイルも、壊れた JSON と同じく退避する
         return quarantine_config("broken", error)
 
     if not isinstance(loaded, dict):

@@ -172,4 +172,4 @@ uv run --no-dev wasabi-bot
 
 `config.json` はBot実行時に自動作成されます。`config.json.example` はその設定例です。`guilds` の下にサーバーIDごとの設定が入ります（例では投稿時刻を1日4回にしています）。設定はすべてスラッシュコマンドで変更できるので、手動で編集する必要はありません。`.env` と `config.json` は `.gitignore` に含まれているため、Gitにはコミットされません。`uv.lock` は依存バージョンを固定するためのファイルなので、Gitにコミットします。
 
-手動で編集する場合はUTF-8で保存してください（BOM付きでも読めます）。JSONとして読めない `config.json` は `config.json.broken-日時` に、サーバーごとの設定に対応する前の旧形式は `config.json.legacy-日時` に退避され、空の設定で起動します（全サーバーの設定がリセットされたように見えるので注意してください）。`rare_percent` が0〜100の整数でない場合は、1%として扱われます。
+手動で編集する場合は必ずUTF-8で保存してください。Shift-JISなどで保存した場合、`config.json` は `config.json.broken-日時` に、サーバーごとの設定に対応する前の旧形式は `config.json.legacy-日時` に退避され、空の設定で起動します（全サーバーの設定がリセットされたように見える）。`rare_percent` が0〜100の整数でない場合は、1%として扱われます。

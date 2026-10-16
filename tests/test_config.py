@@ -112,3 +112,19 @@ def test_load_config_accepts_utf8_bom(config_path):
     # Windows のエディタで保存された BOM 付きファイルを壊れた扱いで退避しない
     assert config.get_guild_config(config.load_config(), 1)["channel_id"] == 123
     assert list(config_path.parent.glob("config.json.broken-*")) == []
+
+
+def test_load_config_moves_non_utf8_file_aside(config_path):
+    content = '{"guilds": {"1": {"memo": "わさび"}}}'.encode("shift_jis")
+    config_path.write_bytes(content)
+
+    # Shift_JIS などで保存されたファイルも、読めないまま毎回エラーにせず退避する
+    assert config.load_config() == {"guilds": {}}
+
+    assert not config_path.exists()
+    backups = list(config_path.parent.glob("config.json.broken-*"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == content
+    # 次に読むと空の設定で作り直される
+    assert config.load_config() == {"guilds": {}}
+    assert json.loads(config_path.read_text(encoding="utf-8")) == {"guilds": {}}
