@@ -386,7 +386,9 @@ def test_post_for_guild_keeps_today_record_written_during_send(config_path, monk
 
 
 def test_post_for_guild_ignores_future_last_post_date(config_path, monkeypatch):
-    update_guild_config(1, channel_id=111, post_times=["12:00"], last_post_date="2026-12-31", last_posted_times=["12:00"])
+    update_guild_config(
+        1, channel_id=111, post_times=["12:00"], last_post_date="2026-12-31", last_posted_times=["12:00"]
+    )
 
     channel = run_post_for_guild(monkeypatch, wasabi.WasabiBot(), 1, local_time(2026, 10, 14, 12, 1))
 

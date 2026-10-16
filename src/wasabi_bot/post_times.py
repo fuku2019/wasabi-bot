@@ -47,9 +47,7 @@ def parse_post_times(text: str) -> list[str]:
 def times_already_passed(times: list[str], now: datetime) -> list[str]:
     # daily_post の投稿条件（scheduled <= now）とそろえ、ちょうど今の時刻も「過ぎた」側に含める
     return [
-        post_time
-        for post_time in times
-        if datetime.combine(now.date(), datetime_time.fromisoformat(post_time)) <= now
+        post_time for post_time in times if datetime.combine(now.date(), datetime_time.fromisoformat(post_time)) <= now
     ]
 
 

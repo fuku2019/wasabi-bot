@@ -71,7 +71,6 @@ class ButtonChainView(discord.ui.View):
 
 
 class WasabiView(ButtonChainView):
-
     @discord.ui.button(
         label="食べる",
         style=discord.ButtonStyle.success,
@@ -90,7 +89,6 @@ class WasabiView(ButtonChainView):
 
 
 class TissueView(ButtonChainView):
-
     @discord.ui.button(
         label="ティッシュにぺ！ってする",
         style=discord.ButtonStyle.primary,
@@ -109,7 +107,6 @@ class TissueView(ButtonChainView):
 
 
 class DirtyJokeView(ButtonChainView):
-
     @discord.ui.button(
         label="下ネタを聞く",
         style=discord.ButtonStyle.danger,
