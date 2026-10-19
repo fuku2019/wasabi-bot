@@ -360,6 +360,19 @@ def test_set_rare_chance_saves_percent(config_path):
     interaction.response.send_message.assert_awaited_once_with("レア確率を 5% に設定しました。", ephemeral=True)
 
 
+def test_show_settings_shows_timezone(config_path, monkeypatch):
+    update_guild_config(1, channel_id=111)
+    interaction = make_post_now_interaction(wasabi.WasabiBot())
+    monkeypatch.setattr(wasabi, "format_timezone", lambda now: "JST (UTC+09:00)")
+
+    asyncio.run(wasabi.show_settings.callback(interaction))
+
+    interaction.response.send_message.assert_awaited_once_with(
+        "自動投稿先: <#111>\n投稿時刻: 00:00, 06:00, 12:00\nレア確率: 1%\nタイムゾーン: JST (UTC+09:00)",
+        ephemeral=True,
+    )
+
+
 def test_post_for_guild_skips_previous_day_slot_when_today_recorded(config_path, monkeypatch):
     update_guild_config(1, channel_id=111, post_times=["23:58"], last_post_date="2026-10-14", last_posted_times=[])
 

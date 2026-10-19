@@ -20,6 +20,7 @@ from wasabi_bot.config import (
 )
 from wasabi_bot.post_times import (
     POST_GRACE_PERIOD,
+    format_timezone,
     is_slot_posted,
     mark_passed_times_as_posted,
     parse_post_times,
@@ -339,10 +340,11 @@ async def show_settings(interaction: discord.Interaction) -> None:
     channel_id = guild_config["channel_id"]
     channel_text = f"<#{channel_id}>" if channel_id else "未設定（/set_channel で設定してください）"
     times_text = ", ".join(guild_config["post_times"] or []) or "なし"
+    timezone_text = format_timezone(datetime.now().astimezone())
 
     await interaction.response.send_message(
         f"自動投稿先: {channel_text}\n投稿時刻: {times_text}\nレア確率: {rare_percent(guild_config)}%\n"
-        "※ 時刻はBotを動かしている環境のローカル時刻です。",
+        f"タイムゾーン: {timezone_text}",
         ephemeral=True,
     )
 

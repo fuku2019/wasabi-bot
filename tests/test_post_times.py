@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -68,3 +68,15 @@ def test_is_slot_posted():
     # 今日の記録があるなら前日の枠は処理済み
     today_config = {"last_post_date": "2026-10-14", "last_posted_times": []}
     assert post_times.is_slot_posted(today_config, "2026-10-13", "23:59", "2026-10-14")
+
+
+@pytest.mark.parametrize(
+    ("tzinfo", "expected"),
+    [
+        (timezone(timedelta(hours=9), "JST"), "JST (UTC+09:00)"),
+        (timezone(timedelta(hours=-5), "EST"), "EST (UTC-05:00)"),
+        (UTC, "UTC (UTC+00:00)"),
+    ],
+)
+def test_format_timezone(tzinfo, expected):
+    assert post_times.format_timezone(datetime(2026, 10, 14, 12, 0, tzinfo=tzinfo)) == expected

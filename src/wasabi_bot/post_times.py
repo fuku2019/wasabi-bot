@@ -51,6 +51,10 @@ def times_already_passed(times: list[str], now: datetime) -> list[str]:
     ]
 
 
+def format_timezone(now: datetime) -> str:
+    return f"{now.tzname()} (UTC{now.strftime('%:z')})"
+
+
 def mark_passed_times_as_posted(
     guild_config: dict[str, Any],
     post_times: list[str],
